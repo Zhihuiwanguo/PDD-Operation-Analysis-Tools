@@ -461,6 +461,7 @@ def _analyze_exceptions(
         "有推广费无订单": promo_no_order,
         "推广费挂接异常": promo_attach_issues,
         "链接映射多候选风险": diagnostics.get("链接映射多候选风险", pd.DataFrame()),
+        "百补字段缺失提示": diagnostics.get("百补字段缺失提示", pd.DataFrame()),
         "差价补款商品": diff_price_items,
         "待确认订单": pending_orders,
     }

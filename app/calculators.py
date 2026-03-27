@@ -117,14 +117,19 @@ def prepare_enriched_orders(tables: dict[str, pd.DataFrame]) -> tuple[pd.DataFra
         if col in orders.columns:
             orders[col] = pd.to_numeric(orders[col], errors="coerce").fillna(0)
 
+    # 百补识别优先级：是否百补 > 资源位类型关键词 > 默认非百补
+    bb_source_missing = False
     if "是否百补" in orders.columns:
         bb_flag = orders["是否百补"].fillna("").astype(str).str.strip()
         is_bb = bb_flag.eq("是")
     else:
         is_bb = pd.Series(False, index=orders.index)
 
-    unresolved_bb = (~is_bb) & (orders["资源位类型"].fillna("").astype(str).apply(_is_bb))
-    is_bb = is_bb | unresolved_bb
+    if "资源位类型" in orders.columns:
+        unresolved_bb = (~is_bb) & (orders["资源位类型"].fillna("").astype(str).apply(_is_bb))
+        is_bb = is_bb | unresolved_bb
+    else:
+        bb_source_missing = "是否百补" not in orders.columns
 
     orders["是否百补"] = np.where(is_bb, "是", "否")
     orders["平台扣点"] = np.where(
@@ -140,6 +145,10 @@ def prepare_enriched_orders(tables: dict[str, pd.DataFrame]) -> tuple[pd.DataFra
     diagnostics = {
         "链接映射多候选风险": duplicate_risk,
     }
+    if bb_source_missing:
+        diagnostics["百补字段缺失提示"] = pd.DataFrame(
+            [{"提示": "映射表缺少‘是否百补’和‘资源位类型’，系统已默认按非百补处理。"}]
+        )
     return orders, diagnostics
 
 
