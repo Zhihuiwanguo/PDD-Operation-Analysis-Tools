@@ -1,4 +1,4 @@
-"""分析层：总览、链接、产品、规格与异常。"""
+"""分析层：总览、链接、产品、规格、推广与异常。"""
 
 from __future__ import annotations
 
@@ -64,19 +64,21 @@ def build_analysis_context(
     }
 
 
-
-
 def _apply_order_filters(orders: pd.DataFrame, filters: dict | None) -> pd.DataFrame:
     if not filters:
         return orders
 
     out = orders.copy()
+
+    if "订单成交时间" not in out.columns:
+        out["订单成交时间"] = ""
     out["__筛选日期"] = pd.to_datetime(
-        out["订单成交时间"].replace({"	": ""}),
+        out["订单成交时间"].replace({"\t": ""}),
         errors="coerce",
     )
+
     if "支付时间" in out.columns:
-        pay_time = pd.to_datetime(out["支付时间"].replace({"	": ""}), errors="coerce")
+        pay_time = pd.to_datetime(out["支付时间"].replace({"\t": ""}), errors="coerce")
         out["__筛选日期"] = out["__筛选日期"].fillna(pay_time)
 
     date_range = filters.get("date_range")
@@ -88,13 +90,13 @@ def _apply_order_filters(orders: pd.DataFrame, filters: dict | None) -> pd.DataF
     if filters.get("stores") and "店铺名称" in out.columns:
         out = out[out["店铺名称"].astype(str).isin(filters["stores"])]
 
-    if filters.get("product_names"):
+    if filters.get("product_names") and "标准产品名称" in out.columns:
         out = out[out["标准产品名称"].astype(str).isin(filters["product_names"])]
 
-    if filters.get("goods_ids"):
-        out = out[out["商品id"].astype(str).isin(list(map(str, filters["goods_ids"]))) ]
+    if filters.get("goods_ids") and "商品id" in out.columns:
+        out = out[out["商品id"].astype(str).isin(list(map(str, filters["goods_ids"])))]
 
-    if filters.get("baibu"):
+    if filters.get("baibu") and "是否百补" in out.columns:
         out = out[out["是否百补"].astype(str).isin(filters["baibu"])]
 
     return out.drop(columns=["__筛选日期"], errors="ignore")
@@ -105,6 +107,7 @@ def _apply_promotion_filters(promo_df: pd.DataFrame, filters: dict | None) -> pd
         return promo_df
 
     out = promo_df.copy()
+
     if filters.get("date_range") and "日期" in out.columns:
         date_range = filters["date_range"]
         if len(date_range) == 2 and all(date_range):
@@ -114,7 +117,8 @@ def _apply_promotion_filters(promo_df: pd.DataFrame, filters: dict | None) -> pd
             out = out[(ser >= start) & (ser <= end)]
 
     if filters.get("goods_ids") and "商品ID" in out.columns:
-        out = out[out["商品ID"].astype(str).isin(list(map(str, filters["goods_ids"]))) ]
+        out = out[out["商品ID"].astype(str).isin(list(map(str, filters["goods_ids"])))]
+
     return out
 
 
@@ -123,6 +127,7 @@ def _apply_cashflow_filters(cashflow_df: pd.DataFrame, filters: dict | None) -> 
         return cashflow_df
 
     out = cashflow_df.copy()
+
     if filters.get("date_range") and "时间" in out.columns:
         date_range = filters["date_range"]
         if len(date_range) == 2 and all(date_range):
@@ -133,7 +138,9 @@ def _apply_cashflow_filters(cashflow_df: pd.DataFrame, filters: dict | None) -> 
 
     if filters.get("stores") and "店铺名称" in out.columns:
         out = out[out["店铺名称"].astype(str).isin(filters["stores"])]
+
     return out
+
 
 def _analyze_overview(orders: pd.DataFrame, cash_spend: float) -> dict[str, float]:
     valid_orders = orders[orders["订单分类"] == "有效"]
@@ -193,7 +200,6 @@ def _analyze_links(orders: pd.DataFrame, promo_by_product: pd.DataFrame) -> pd.D
 
 
 def _build_product_promo(valid_orders: pd.DataFrame, promo_by_product: pd.DataFrame) -> pd.DataFrame:
-    # 仅在商品ID->标准产品名称“可解释映射”下汇总推广费：每个商品ID取有效订单最多的产品作为归属。
     mapping = (
         valid_orders.groupby(["商品id", "标准产品名称"], dropna=False)
         .size()
@@ -225,7 +231,7 @@ def _analyze_products(orders: pd.DataFrame, promo_by_product: pd.DataFrame) -> p
     valid_orders = orders[orders["订单分类"] == "有效"].copy()
 
     counts = orders.groupby("标准产品名称", dropna=False).agg(
-        有效订单数=("订单分类", lambda s: int((s == "有效").sum()),),
+        有效订单数=("订单分类", lambda s: int((s == "有效").sum())),
     ).reset_index()
 
     metrics = valid_orders.groupby("标准产品名称", dropna=False).agg(
@@ -244,7 +250,16 @@ def _analyze_products(orders: pd.DataFrame, promo_by_product: pd.DataFrame) -> p
     out = out.merge(promo_by_product_name, on="标准产品名称", how="left")
     out = out.rename(columns={"实际成交花费(元)": "链接推广费合计"})
 
-    for col in ["销售件数", "用户实付", "商家实收", "产品总成本", "快递总成本", "平台扣点", "订单侧估算毛利", "链接推广费合计"]:
+    for col in [
+        "销售件数",
+        "用户实付",
+        "商家实收",
+        "产品总成本",
+        "快递总成本",
+        "平台扣点",
+        "订单侧估算毛利",
+        "链接推广费合计",
+    ]:
         out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0.0)
 
     out["扣推广后贡献毛利"] = out["订单侧估算毛利"] - out["链接推广费合计"]
@@ -278,7 +293,6 @@ def _analyze_baibu_vs_normal(orders: pd.DataFrame, promo_by_product: pd.DataFram
         订单侧估算毛利=("订单侧估算毛利", "sum"),
     ).reset_index()
 
-    # 推广费按商品ID聚合后，依据有效订单中商品ID的百补属性（多数口径）汇总。
     goods_bb = (
         valid_orders.groupby(["商品id", "是否百补"], dropna=False)
         .size()
@@ -389,7 +403,6 @@ def _build_business_alerts(
     }
 
 
-
 def _analyze_exceptions(
     tables: dict[str, pd.DataFrame],
     orders: pd.DataFrame,
@@ -421,7 +434,6 @@ def _analyze_exceptions(
     orders["销售规格ID"] = orders["销售规格ID"].fillna("").astype(str).str.strip()
     orders["订单销售规格ID"] = orders["订单销售规格ID"].fillna("").astype(str).str.strip()
 
-    # 未映射规格：按 商品ID + 订单销售规格ID 判断
     order_pairs = orders[["订单号", "商品id", "订单销售规格ID", "商品规格", "商品"]].copy()
     order_pairs = order_pairs.rename(
         columns={
@@ -452,9 +464,7 @@ def _analyze_exceptions(
         columns=["商品ID"],
     )
 
-    # 重复映射：只按 商品ID + 销售规格ID pair 判定
     link_map_for_dup = link_map.copy()
-
     if "商品ID" not in link_map_for_dup.columns:
         link_map_for_dup["商品ID"] = ""
     if "销售规格ID" not in link_map_for_dup.columns:
@@ -529,6 +539,8 @@ def _analyze_exceptions(
         "差价补款商品": diff_price_items,
         "待确认订单": pending_orders,
     }
+
+
 def _pick_first_existing(df: pd.DataFrame, candidates: list[str]) -> str | None:
     for col in candidates:
         if col in df.columns:
@@ -547,35 +559,30 @@ def _prepare_promotion_base(promo_df: pd.DataFrame) -> pd.DataFrame:
         out["商品ID"] = ""
     out["商品ID"] = out["商品ID"].fillna("").astype(str).str.strip()
 
-    # 日期
     date_col = _pick_first_existing(out, ["日期", "统计日期", "时间"])
     if date_col is None:
         out["日期"] = pd.NaT
     else:
         out["日期"] = pd.to_datetime(out[date_col], errors="coerce")
 
-    # 推广费
     spend_col = _pick_first_existing(out, ["实际成交花费(元)", "实际成交花费", "花费"])
     if spend_col is None:
         out["推广费"] = 0.0
     else:
         out["推广费"] = _safe_numeric(out[spend_col])
 
-    # 实际ROI
     roi_col = _pick_first_existing(out, ["实际ROI", "实际投产比", "投产比"])
     if roi_col is None:
         out["实际ROI"] = 0.0
     else:
         out["实际ROI"] = _safe_numeric(out[roi_col])
 
-    # 推广成交金额：优先真实字段，否则用 ROI * 推广费 反推
     gmv_col = _pick_first_existing(out, ["成交金额", "支付成交金额", "推广成交金额", "交易额"])
     if gmv_col is None:
         out["推广成交金额"] = out["实际ROI"] * out["推广费"]
     else:
         out["推广成交金额"] = _safe_numeric(out[gmv_col])
 
-    # 曝光、点击、订单数
     imp_col = _pick_first_existing(out, ["曝光量", "曝光", "展现量"])
     clk_col = _pick_first_existing(out, ["点击量", "点击"])
     ord_col = _pick_first_existing(out, ["成交订单数", "订单数", "成交笔数"])
@@ -584,11 +591,9 @@ def _prepare_promotion_base(promo_df: pd.DataFrame) -> pd.DataFrame:
     out["点击"] = _safe_numeric(out[clk_col]) if clk_col else 0.0
     out["成交订单数"] = _safe_numeric(out[ord_col]) if ord_col else 0.0
 
-    # CTR、转化率
     out["CTR"] = out.apply(lambda r: safe_divide(r["点击"], r["曝光"]), axis=1)
     out["转化率"] = out.apply(lambda r: safe_divide(r["成交订单数"], r["点击"]), axis=1)
 
-    # 链接标题
     title_col = _pick_first_existing(out, ["链接标题", "商品", "商品名称", "计划名称"])
     if title_col is None:
         out["链接标题"] = ""
@@ -601,7 +606,6 @@ def _prepare_promotion_base(promo_df: pd.DataFrame) -> pd.DataFrame:
 def _analyze_promotion(promo_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
     base = _prepare_promotion_base(promo_df)
 
-    # 店铺级每日推广趋势
     daily = (
         base.groupby("日期", dropna=False)
         .agg(
@@ -619,7 +623,6 @@ def _analyze_promotion(promo_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
     daily["转化率"] = daily.apply(lambda r: safe_divide(r["成交订单数"], r["点击"]), axis=1)
     daily = daily.sort_values("日期")
 
-    # 商品ID汇总
     goods = (
         base.groupby("商品ID", dropna=False)
         .agg(
@@ -645,7 +648,6 @@ def _analyze_promotion(promo_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
     goods["日均推广成交金额"] = goods.apply(lambda r: safe_divide(r["推广成交金额"], r["投放天数"]), axis=1)
     goods = goods.sort_values("推广费", ascending=False)
 
-    # 单商品ID每日明细
     detail = (
         base.groupby(["日期", "商品ID"], dropna=False)
         .agg(
@@ -663,7 +665,6 @@ def _analyze_promotion(promo_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
     detail["转化率"] = detail.apply(lambda r: safe_divide(r["成交订单数"], r["点击"]), axis=1)
     detail = detail.sort_values(["商品ID", "日期"], ascending=[True, True])
 
-    # 推广异常
     spend_median = goods["推广费"].median() if len(goods) else 0
     roi_median = goods["实际ROI"].median() if len(goods) else 0
 
@@ -676,7 +677,6 @@ def _analyze_promotion(promo_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
         & (goods["推广成交金额"] < goods["推广费"] * 1.2)
     ].copy()
 
-    # ROI连续下滑：按商品ID看最近3天是否连续下降
     detail_sorted = detail.sort_values(["商品ID", "日期"])
     roi_drop_rows = []
     for goods_id, grp in detail_sorted.groupby("商品ID"):
@@ -687,7 +687,6 @@ def _analyze_promotion(promo_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
                 roi_drop_rows.append(g.iloc[-1])
     roi_continuous_down = pd.DataFrame(roi_drop_rows)
 
-    # 最近放量但效率恶化：最后一天花费显著高于前均值，ROI低于前均值
     scale_bad_rows = []
     for goods_id, grp in detail_sorted.groupby("商品ID"):
         g = grp.dropna(subset=["日期"]).sort_values("日期")
