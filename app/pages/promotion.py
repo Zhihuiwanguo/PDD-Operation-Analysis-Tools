@@ -2,29 +2,8 @@
 
 from __future__ import annotations
 
-import math
-
 import pandas as pd
 import streamlit as st
-
-
-def _safe_float(value) -> float:
-    try:
-        if value is None:
-            return 0.0
-        if isinstance(value, float) and math.isnan(value):
-            return 0.0
-        return float(value)
-    except Exception:
-        return 0.0
-
-
-def _fmt_percent(v: float) -> str:
-    return f"{v:.2%}" if pd.notna(v) else "-"
-
-
-def _fmt_num(v: float) -> str:
-    return f"{v:,.2f}" if pd.notna(v) else "-"
 
 
 def render(promotion_analysis: dict):
@@ -39,17 +18,17 @@ def render(promotion_analysis: dict):
         st.info("当前无推广分析数据。")
         return
 
-    st.markdown("### 一、店铺级每日推广趋势")
+    st.markdown("### 一、店铺级每日推广分析")
     if daily.empty:
-        st.info("当前无每日推广趋势数据。")
+        st.info("当前无每日推广数据。")
     else:
         daily_show_cols = [
             c
             for c in [
                 "日期",
-                "推广费",
-                "推广成交金额",
-                "每日推广ROI",
+                "实际成交花费",
+                "结算金额",
+                "结算投产比",
                 "推广商品ID数",
                 "曝光",
                 "点击",
@@ -64,24 +43,24 @@ def render(promotion_analysis: dict):
         if "日期" in daily.columns:
             chart_df = daily.copy().sort_values("日期")
 
-            if {"日期", "推广费"}.issubset(chart_df.columns):
-                st.markdown("#### 每日推广费趋势")
-                st.line_chart(chart_df.set_index("日期")[["推广费"]], use_container_width=True)
+            if {"日期", "实际成交花费"}.issubset(chart_df.columns):
+                st.markdown("#### 每日实际成交花费趋势")
+                st.line_chart(chart_df.set_index("日期")[["实际成交花费"]], use_container_width=True)
 
-            if {"日期", "推广成交金额"}.issubset(chart_df.columns):
-                st.markdown("#### 每日推广成交金额趋势")
-                st.line_chart(chart_df.set_index("日期")[["推广成交金额"]], use_container_width=True)
+            if {"日期", "结算金额"}.issubset(chart_df.columns):
+                st.markdown("#### 每日结算金额趋势")
+                st.line_chart(chart_df.set_index("日期")[["结算金额"]], use_container_width=True)
 
-            if {"日期", "每日推广ROI"}.issubset(chart_df.columns):
-                st.markdown("#### 每日推广ROI趋势")
-                st.line_chart(chart_df.set_index("日期")[["每日推广ROI"]], use_container_width=True)
+            if {"日期", "结算投产比"}.issubset(chart_df.columns):
+                st.markdown("#### 每日结算投产比趋势")
+                st.line_chart(chart_df.set_index("日期")[["结算投产比"]], use_container_width=True)
 
             if {"日期", "推广商品ID数"}.issubset(chart_df.columns):
                 st.markdown("#### 每日推广商品ID数趋势")
                 st.line_chart(chart_df.set_index("日期")[["推广商品ID数"]], use_container_width=True)
 
     st.markdown("---")
-    st.markdown("### 二、商品ID维度推广分析")
+    st.markdown("### 二、商品ID汇总推广分析")
     if goods.empty:
         st.info("当前无商品ID推广汇总数据。")
     else:
@@ -90,9 +69,9 @@ def render(promotion_analysis: dict):
             for c in [
                 "商品ID",
                 "链接标题",
-                "推广费",
-                "推广成交金额",
-                "实际ROI",
+                "实际成交花费",
+                "结算金额",
+                "结算投产比",
                 "花费占比",
                 "花费排名",
                 "ROI排名",
@@ -102,8 +81,8 @@ def render(promotion_analysis: dict):
                 "成交订单数",
                 "转化率",
                 "投放天数",
-                "日均推广费",
-                "日均推广成交金额",
+                "日均实际成交花费",
+                "日均结算金额",
             ]
             if c in goods.columns
         ]
@@ -133,9 +112,9 @@ def render(promotion_analysis: dict):
                     "日期",
                     "商品ID",
                     "链接标题",
-                    "推广费",
-                    "推广成交金额",
-                    "实际ROI",
+                    "实际成交花费",
+                    "结算金额",
+                    "结算投产比",
                     "曝光",
                     "点击",
                     "CTR",
@@ -149,25 +128,34 @@ def render(promotion_analysis: dict):
             if "日期" in selected_detail.columns:
                 selected_detail = selected_detail.sort_values("日期")
 
-                if {"日期", "推广费"}.issubset(selected_detail.columns):
-                    st.markdown("#### 单商品ID每日推广费趋势")
-                    st.line_chart(selected_detail.set_index("日期")[["推广费"]], use_container_width=True)
-
-                if {"日期", "推广成交金额"}.issubset(selected_detail.columns):
-                    st.markdown("#### 单商品ID每日推广成交金额趋势")
+                if {"日期", "实际成交花费"}.issubset(selected_detail.columns):
+                    st.markdown("#### 单商品ID每日实际成交花费趋势")
                     st.line_chart(
-                        selected_detail.set_index("日期")[["推广成交金额"]],
+                        selected_detail.set_index("日期")[["实际成交花费"]],
                         use_container_width=True,
                     )
 
-                if {"日期", "实际ROI"}.issubset(selected_detail.columns):
-                    st.markdown("#### 单商品ID每日推广ROI趋势")
-                    st.line_chart(selected_detail.set_index("日期")[["实际ROI"]], use_container_width=True)
+                if {"日期", "结算金额"}.issubset(selected_detail.columns):
+                    st.markdown("#### 单商品ID每日结算金额趋势")
+                    st.line_chart(
+                        selected_detail.set_index("日期")[["结算金额"]],
+                        use_container_width=True,
+                    )
+
+                if {"日期", "结算投产比"}.issubset(selected_detail.columns):
+                    st.markdown("#### 单商品ID每日结算投产比趋势")
+                    st.line_chart(
+                        selected_detail.set_index("日期")[["结算投产比"]],
+                        use_container_width=True,
+                    )
 
                 metric_cols = [c for c in ["点击", "曝光"] if c in selected_detail.columns]
-                if "日期" in selected_detail.columns and metric_cols:
+                if metric_cols:
                     st.markdown("#### 单商品ID每日点击 / 曝光趋势")
-                    st.line_chart(selected_detail.set_index("日期")[metric_cols], use_container_width=True)
+                    st.line_chart(
+                        selected_detail.set_index("日期")[metric_cols],
+                        use_container_width=True,
+                    )
 
     st.markdown("---")
     st.markdown("### 四、推广异常识别")
@@ -188,9 +176,9 @@ def render(promotion_analysis: dict):
                         "商品ID",
                         "链接标题",
                         "日期",
-                        "推广费",
-                        "推广成交金额",
-                        "实际ROI",
+                        "实际成交花费",
+                        "结算金额",
+                        "结算投产比",
                         "曝光",
                         "点击",
                         "CTR",
