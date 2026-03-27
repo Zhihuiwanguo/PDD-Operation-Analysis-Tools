@@ -391,87 +391,111 @@ def _analyze_exceptions(
     diagnostics: dict[str, pd.DataFrame],
 ) -> dict[str, pd.DataFrame]:
     link_map = tables["link_spec_mapping"].copy()
-    link_map["商品ID"] = link_map["商品ID"].astype(str).str.strip()
-    link_map["销售规格ID"] = link_map["销售规格ID"].astype(str).str.strip()
 
-    # 未映射规格：订单 商品ID + 订单销售规格ID 在映射表中不存在
-    mapped_pairs = set(zip(link_map["商品ID"], link_map["销售规格ID"]))
+    if "商品ID" not in link_map.columns:
+        link_map["商品ID"] = ""
+    if "销售规格ID" not in link_map.columns:
+        link_map["销售规格ID"] = ""
+
+    link_map["商品ID"] = link_map["商品ID"].fillna("").astype(str).str.strip()
+    link_map["销售规格ID"] = link_map["销售规格ID"].fillna("").astype(str).str.strip()
+
+    if "商品id" not in orders.columns:
+        orders["商品id"] = ""
     if "销售规格ID" not in orders.columns:
-    orders["销售规格ID"] = ""
+        orders["销售规格ID"] = ""
+    if "订单销售规格ID" not in orders.columns:
+        orders["订单销售规格ID"] = orders["销售规格ID"]
 
-if "订单销售规格ID" not in orders.columns:
-    orders["订单销售规格ID"] = orders["销售规格ID"]
+    for col in ["订单号", "商品规格", "商品", "售后状态"]:
+        if col not in orders.columns:
+            orders[col] = ""
 
-for col in ["订单号", "商品id", "商品规格", "商品"]:
-    if col not in orders.columns:
-        orders[col] = ""
+    orders["商品id"] = orders["商品id"].fillna("").astype(str).str.strip()
+    orders["订单销售规格ID"] = orders["订单销售规格ID"].fillna("").astype(str).str.strip()
 
-order_pairs = orders[["订单号", "商品id", "订单销售规格ID", "商品规格", "商品"]].copy()
-    order_pairs["订单销售规格ID"] = order_pairs["订单销售规格ID"].fillna("").astype(str).str.strip()
-    order_pairs["pair_found"] = order_pairs.apply(
-        lambda r: (str(r["商品id"]).strip(), str(r["订单销售规格ID"]).strip()) in mapped_pairs,
-        axis=1,
+    # 未映射规格：按 商品ID + 订单销售规格ID 判断
+    order_pairs = orders[["订单号", "商品id", "订单销售规格ID", "商品规格", "商品"]].copy()
+    order_pairs = order_pairs.rename(
+        columns={
+            "商品id": "商品ID",
+            "订单销售规格ID": "销售规格ID",
+        }
     )
-    unmapped_specs = order_pairs[(~order_pairs["pair_found"]) | (order_pairs["订单销售规格ID"] == "")].drop(
-        columns=["pair_found"]
-    )
 
-    order_ids = set(orders["商品id"].astype(str).str.strip().tolist())
-    promo_ids = set(promo_by_product["商品ID"].astype(str).str.strip().tolist())
-    mapped_ids = set(link_map["商品ID"].astype(str).str.strip().tolist())
-    unmapped_goods = pd.DataFrame(sorted((order_ids | promo_ids) - mapped_ids), columns=["商品ID"])
+    mapped_pairs = link_map[["商品ID", "销售规格ID"]].drop_duplicates()
+    unmapped_specs = order_pairs.merge(
+        mapped_pairs,
+        on=["商品ID", "销售规格ID"],
+        how="left",
+        indicator=True,
+    )
+    unmapped_specs = unmapped_specs[unmapped_specs["_merge"] == "left_only"].drop(columns=["_merge"])
+
+    mapped_ids = set(link_map["商品ID"].tolist())
+    order_ids = set(orders["商品id"].fillna("").astype(str).str.strip().tolist())
+    promo_ids = set(promo_by_product["商品ID"].fillna("").astype(str).str.strip().tolist()) if "商品ID" in promo_by_product.columns else set()
+
+    unmapped_goods = pd.DataFrame(
+        sorted(x for x in (order_ids | promo_ids) - mapped_ids if x),
+        columns=["商品ID"],
+    )
 
     duplicate_mapping = (
-        link_map.groupby(["商品ID", "销售规格ID"]).size().reset_index(name="重复数").query("重复数 > 1")
-        if {"商品ID", "销售规格ID"}.issubset(link_map.columns)
-        else pd.DataFrame(columns=["商品ID", "销售规格ID", "重复数"])
+        link_map.groupby(["商品ID", "销售规格ID"])
+        .size()
+        .reset_index(name="重复数")
+        .query("重复数 > 1")
     )
 
-    # 基于有效订单判断“有订单无推广费”
-    effective_orders = orders[orders["订单分类"] == "有效"]
-    effective_by_id = (
-        effective_orders.groupby("商品id", as_index=False).size().rename(columns={"商品id": "商品ID", "size": "有效订单数"})
+    valid_orders = orders[orders["订单分类"] == "有效"].copy()
+
+    order_with_promo = (
+        valid_orders.groupby("商品id", as_index=False)
+        .size()
+        .rename(columns={"商品id": "商品ID", "size": "订单数"})
     )
-    with_promo = effective_by_id.merge(promo_by_product, on="商品ID", how="left")
-    with_promo["实际成交花费(元)"] = pd.to_numeric(with_promo["实际成交花费(元)"], errors="coerce").fillna(0)
-    order_no_promo = with_promo[with_promo["实际成交花费(元)"] <= 0]
+    order_with_promo["商品ID"] = order_with_promo["商品ID"].fillna("").astype(str).str.strip()
 
-    promo_no_order = promo_by_product[~promo_by_product["商品ID"].isin(effective_by_id["商品ID"])]
+    with_promo = order_with_promo.merge(promo_by_product, on="商品ID", how="left")
+    if "实际成交花费(元)" not in with_promo.columns:
+        with_promo["实际成交花费(元)"] = 0
+    order_no_promo = with_promo[with_promo["实际成交花费(元)"].fillna(0) <= 0]
 
-    promo_raw = tables["promotion"].copy()
-    if "商品ID" in promo_raw.columns:
-        promo_raw["商品ID"] = promo_raw["商品ID"].astype(str).str.strip()
-        promo_raw["实际成交花费(元)"] = pd.to_numeric(promo_raw.get("实际成交花费(元)"), errors="coerce").fillna(0)
-        bad_id_mask = promo_raw["商品ID"].str.lower().isin({"", "-", "nan", "none", "null"})
-        invalid_id_rows = promo_raw.loc[bad_id_mask, ["商品ID", "实际成交花费(元)"]].copy()
-        if not invalid_id_rows.empty:
-            invalid_id_rows["原因"] = "商品ID为空/非法（疑似汇总行）"
-    else:
-        invalid_id_rows = pd.DataFrame(columns=["商品ID", "实际成交花费(元)", "原因"])
+    promo_no_order = promo_by_product.copy()
+    if "商品ID" in promo_no_order.columns:
+        promo_no_order["商品ID"] = promo_no_order["商品ID"].fillna("").astype(str).str.strip()
+        promo_no_order = promo_no_order[~promo_no_order["商品ID"].isin(order_with_promo["商品ID"])]
 
-    promo_attach_issues = promo_by_product.copy()
-    promo_attach_issues["原因"] = ""
-    promo_attach_issues.loc[~promo_attach_issues["商品ID"].isin(mapped_ids), "原因"] = "商品ID未在链接映射表中"
-    promo_attach_issues.loc[
-        promo_attach_issues["原因"].eq("") & ~promo_attach_issues["商品ID"].isin(order_ids), "原因"
-    ] = "有推广费但订单侧无该商品ID"
-    promo_attach_issues = pd.concat(
-        [promo_attach_issues[promo_attach_issues["原因"] != ""], invalid_id_rows],
-        ignore_index=True,
-    )
+    promo_attach_issues = pd.DataFrame()
+    if "商品ID" in promo_by_product.columns:
+        promo_attach_issues = promo_by_product.copy()
+        promo_attach_issues["商品ID"] = promo_attach_issues["商品ID"].fillna("").astype(str).str.strip()
 
-    diff_price_items = orders[orders["订单分类"] == "非经营剔除"]["订单号 商品id 商品".split()]
-    pending_orders = orders[orders["订单分类"] == "待确认"]["订单号 商品id 售后状态 商品".split()]
+        def _attach_reason(goods_id: str) -> str:
+            if goods_id in ["", "-", "nan", "None"]:
+                return "商品ID为空/非法（疑似汇总行）"
+            if goods_id not in mapped_ids:
+                return "未在映射表中"
+            if goods_id not in order_ids:
+                return "订单侧无该商品ID"
+            return ""
 
-    returnreturn {
-    "未映射规格": unmapped_specs,
-    "未映射商品ID": unmapped_goods,
-    "重复映射": duplicate_mapping,
-    "有订单无推广费": order_no_promo,
-    "有推广费无订单": promo_no_order,
-    "推广费挂接异常": promo_attach_issues,
-    "链接映射多候选风险": diagnostics.get("链接映射多候选风险", pd.DataFrame()),
-    "百补字段缺失提示": diagnostics.get("百补字段缺失提示", pd.DataFrame()),
-    "差价补款商品": diff_price_items,
-    "待确认订单": pending_orders,
-}
+        promo_attach_issues["挂接异常原因"] = promo_attach_issues["商品ID"].apply(_attach_reason)
+        promo_attach_issues = promo_attach_issues[promo_attach_issues["挂接异常原因"] != ""]
+
+    diff_price_items = orders[orders["订单分类"] == "非经营剔除"][["订单号", "商品id", "商品"]]
+    pending_orders = orders[orders["订单分类"] == "待确认"][["订单号", "商品id", "售后状态", "商品"]]
+
+    return {
+        "未映射规格": unmapped_specs,
+        "未映射商品ID": unmapped_goods,
+        "重复映射": duplicate_mapping,
+        "有订单无推广费": order_no_promo,
+        "有推广费无订单": promo_no_order,
+        "推广费挂接异常": promo_attach_issues,
+        "链接映射多候选风险": diagnostics.get("链接映射多候选风险", pd.DataFrame()),
+        "百补字段缺失提示": diagnostics.get("百补字段缺失提示", pd.DataFrame()),
+        "差价补款商品": diff_price_items,
+        "待确认订单": pending_orders,
+    }
