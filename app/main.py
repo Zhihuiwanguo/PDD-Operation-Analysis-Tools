@@ -138,17 +138,17 @@ def main() -> None:
     st.success("分析完成。")
     st.caption(f"当前日期筛选字段：{ctx['date_field_used']}")
 
-   tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(
-    [
-        "经营总览",
-        "链接分析",
-        "产品分析",
-        "规格分析",
-        "百补 vs 日常",
-        "经营异常",
-        "异常清单",
-    ]
-)
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(
+        [
+            "经营总览",
+            "链接分析",
+            "产品分析",
+            "规格分析",
+            "百补 vs 日常",
+            "经营异常",
+            "异常清单",
+        ]
+    )
 
     with tab1:
         overview.render(ctx["overview"])
@@ -158,12 +158,12 @@ def main() -> None:
         products.render(ctx["product_summary"])
     with tab4:
         specs.render(ctx["spec_summary"])
-   with tab5:
-    baibu_vs_normal.render(ctx["baibu_vs_normal"])
-with tab6:
-    business_alerts.render(ctx["business_alerts"])
-with tab7:
-    exceptions.render(ctx["exceptions"])
+    with tab5:
+        baibu_vs_normal.render(ctx["baibu_vs_normal"])
+    with tab6:
+        business_alerts.render(ctx["business_alerts"])
+    with tab7:
+        exceptions.render(ctx["exceptions"])
 
     excel_blob = to_excel_bytes(
         {
@@ -172,6 +172,8 @@ with tab7:
             "产品分析": ctx["product_summary"],
             "规格分析": ctx["spec_summary"],
             "百补vs日常": ctx["baibu_vs_normal"],
+            **{f"经营异常-{k}": v for k, v in ctx["business_alerts"].items()},
+            **{f"异常-{k}": v for k, v in ctx["exceptions"].items()},
         }
     )
 
