@@ -442,10 +442,31 @@ def _analyze_exceptions(
     )
 
     duplicate_mapping = (
-        link_map.groupby(["商品ID", "销售规格ID"])
-        .size()
-        .reset_index(name="重复数")
-        .query("重复数 > 1")
+        link_map_for_dup = link_map.copy()
+
+if "商品ID" not in link_map_for_dup.columns:
+    link_map_for_dup["商品ID"] = ""
+if "销售规格ID" not in link_map_for_dup.columns:
+    link_map_for_dup["销售规格ID"] = ""
+
+link_map_for_dup["商品ID"] = (
+    link_map_for_dup["商品ID"].fillna("").astype(str).str.strip()
+)
+link_map_for_dup["销售规格ID"] = (
+    link_map_for_dup["销售规格ID"].fillna("").astype(str).str.strip()
+)
+
+# 过滤空商品ID / 空销售规格ID，避免脏值误报
+link_map_for_dup = link_map_for_dup[
+    (link_map_for_dup["商品ID"] != "") & (link_map_for_dup["销售规格ID"] != "")
+].copy()
+
+duplicate_mapping = (
+    link_map_for_dup.groupby(["商品ID", "销售规格ID"], dropna=False)
+    .size()
+    .reset_index(name="重复数")
+    .query("重复数 > 1")
+)
     )
 
     valid_orders = orders[orders["订单分类"] == "有效"].copy()
