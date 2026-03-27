@@ -10,7 +10,16 @@ from app.config import CONFIG
 from app.constants import DATE_CANDIDATE_COLUMNS, NUMERIC_COLUMNS, UPLOAD_SPECS
 from app.data_loader import load_sample_tables, load_table
 from app.exporters import to_excel_bytes
-from app.pages import baibu_vs_normal, business_alerts, exceptions, links, overview, products, specs
+from app.pages import (
+    baibu_vs_normal,
+    business_alerts,
+    exceptions,
+    links,
+    overview,
+    products,
+    promotion,
+    specs,
+)
 from app.utils import to_numeric
 from app.validators import validate_all
 
@@ -113,15 +122,16 @@ def main() -> None:
     st.success("分析完成。")
     st.caption(f"当前日期筛选字段：{ctx['date_field_used']}")
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
-        "经营总览",
-        "链接分析",
-        "产品分析",
-        "规格分析",
-        "百补 vs 日常",
-        "经营异常",
-        "异常清单",
-    ])
+   tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+    "经营总览",
+    "链接分析",
+    "产品分析",
+    "规格分析",
+    "百补 vs 日常",
+    "推广分析",
+    "经营异常",
+    "异常清单",
+])
     with tab1:
         overview.render(ctx["overview"])
     with tab2:
@@ -130,24 +140,30 @@ def main() -> None:
         products.render(ctx["product_summary"])
     with tab4:
         specs.render(ctx["spec_summary"])
-    with tab5:
-        baibu_vs_normal.render(ctx["baibu_vs_normal"])
-    with tab6:
-        business_alerts.render(ctx["business_alerts"])
-    with tab7:
-        exceptions.render(ctx["exceptions"])
+   with tab5:
+    baibu_vs_normal.render(ctx["baibu_vs_normal"])
+with tab6:
+    promotion.render(ctx["promotion_analysis"])
+with tab7:
+    business_alerts.render(ctx["business_alerts"])
+with tab8:
+    exceptions.render(ctx["exceptions"])
 
-    excel_blob = to_excel_bytes(
-        {
-            "经营总览": pd.DataFrame([ctx["overview"]]),
-            "链接分析": ctx["link_summary"],
-            "产品分析": ctx["product_summary"],
-            "规格分析": ctx["spec_summary"],
-            "百补vs日常": ctx["baibu_vs_normal"],
-            **{f"经营异常-{k}": v for k, v in ctx["business_alerts"].items()},
-            **{f"异常-{k}": v for k, v in ctx["exceptions"].items()},
-        }
-    )
+   excel_blob = to_excel_bytes(
+    {
+        "经营总览": pd.DataFrame([ctx["overview"]]),
+        "链接分析": ctx["link_summary"],
+        "产品分析": ctx["product_summary"],
+        "规格分析": ctx["spec_summary"],
+        "百补vs日常": ctx["baibu_vs_normal"],
+        "推广分析-每日": ctx["promotion_analysis"]["daily"],
+        "推广分析-商品汇总": ctx["promotion_analysis"]["goods"],
+        "推广分析-单品明细": ctx["promotion_analysis"]["detail"],
+        **{f"推广异常-{k}": v for k, v in ctx["promotion_analysis"]["anomalies"].items()},
+        **{f"经营异常-{k}": v for k, v in ctx["business_alerts"].items()},
+        **{f"异常-{k}": v for k, v in ctx["exceptions"].items()},
+    }
+)
     st.download_button(
         "导出结果 Excel（当前筛选结果）",
         data=excel_blob,
