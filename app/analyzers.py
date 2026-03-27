@@ -40,6 +40,7 @@ def build_analysis_context(
     product_summary = _analyze_products(orders, promo_by_product)
     spec_summary = _analyze_specs(orders)
     baibu_vs_normal = _analyze_baibu_vs_normal(orders, promo_by_product)
+    promotion_analysis = _analyze_promotion_module(promo_df, orders)
     business_alerts = _build_business_alerts(link_summary, product_summary, spec_summary)
     overview = _analyze_overview(orders, cash_spend)
     exceptions = _analyze_exceptions(tables, orders, promo_by_product, diagnostics)
@@ -50,6 +51,7 @@ def build_analysis_context(
         "product_summary": product_summary,
         "spec_summary": spec_summary,
         "baibu_vs_normal": baibu_vs_normal,
+        "promotion_analysis": promotion_analysis,
         "business_alerts": business_alerts,
         "overview": overview,
         "exceptions": exceptions,
@@ -358,6 +360,162 @@ def _analyze_specs(orders: pd.DataFrame) -> pd.DataFrame:
     out["规格定位建议"] = out.apply(_spec_positioning, axis=1)
 
     return out.sort_values(["标准产品名称", "销售件数"], ascending=[True, False])
+
+
+def _pick_first(df: pd.DataFrame, candidates: list[str]) -> str | None:
+    for c in candidates:
+        if c in df.columns:
+            return c
+    return None
+
+
+def _normalize_promotion_detail(promo_df: pd.DataFrame) -> pd.DataFrame:
+    if promo_df.empty:
+        return pd.DataFrame(columns=["日期", "商品ID", "推广费", "推广成交金额", "实际ROI", "曝光", "点击", "成交订单数", "CTR", "转化率"])
+
+    df = promo_df.copy()
+    date_col = _pick_first(df, ["日期"])
+    goods_col = _pick_first(df, ["商品ID", "商品id"])
+    spend_col = _pick_first(df, ["实际成交花费(元)"])
+    roi_col = _pick_first(df, ["实际ROI", "实际投产比"])
+    amount_col = _pick_first(df, ["推广成交金额", "成交金额(元)", "交易额(元)"])
+    expo_col = _pick_first(df, ["曝光", "曝光量"])
+    click_col = _pick_first(df, ["点击", "点击量"])
+    order_col = _pick_first(df, ["成交订单数", "成交笔数"])
+
+    out = pd.DataFrame()
+    out["日期"] = pd.to_datetime(df[date_col], errors="coerce") if date_col else pd.NaT
+    out["商品ID"] = df[goods_col].astype(str).str.strip() if goods_col else ""
+    out["推广费"] = pd.to_numeric(df[spend_col], errors="coerce").fillna(0) if spend_col else 0
+
+    if amount_col:
+        out["推广成交金额"] = pd.to_numeric(df[amount_col], errors="coerce").fillna(0)
+    elif roi_col:
+        out["推广成交金额"] = pd.to_numeric(df[roi_col], errors="coerce").fillna(0) * out["推广费"]
+    else:
+        out["推广成交金额"] = 0.0
+
+    if roi_col:
+        out["实际ROI"] = pd.to_numeric(df[roi_col], errors="coerce").fillna(0)
+    else:
+        out["实际ROI"] = out.apply(lambda r: safe_divide(r["推广成交金额"], r["推广费"]), axis=1)
+
+    out["曝光"] = pd.to_numeric(df[expo_col], errors="coerce").fillna(0) if expo_col else 0
+    out["点击"] = pd.to_numeric(df[click_col], errors="coerce").fillna(0) if click_col else 0
+    out["成交订单数"] = pd.to_numeric(df[order_col], errors="coerce").fillna(0) if order_col else 0
+    out["CTR"] = out.apply(lambda r: safe_divide(r["点击"], r["曝光"]), axis=1)
+    out["转化率"] = out.apply(lambda r: safe_divide(r["成交订单数"], r["点击"]), axis=1)
+    out = out.dropna(subset=["日期"])
+    return out
+
+
+def _analyze_promotion_module(promo_df: pd.DataFrame, orders: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    detail = _normalize_promotion_detail(promo_df)
+    if detail.empty:
+        empty = pd.DataFrame()
+        return {
+            "daily": empty,
+            "goods": empty,
+            "detail": empty,
+            "anomalies": {
+                "推广费高但ROI低": empty,
+                "推广费高但成交增长不足": empty,
+                "ROI连续下滑": empty,
+                "放量但效率恶化": empty,
+            },
+        }
+
+    daily = detail.groupby("日期", as_index=False).agg(
+        推广费=("推广费", "sum"),
+        推广成交金额=("推广成交金额", "sum"),
+        推广商品ID数=("商品ID", "nunique"),
+        曝光=("曝光", "sum"),
+        点击=("点击", "sum"),
+        成交订单数=("成交订单数", "sum"),
+    )
+    daily["每日推广ROI"] = daily.apply(lambda r: safe_divide(r["推广成交金额"], r["推广费"]), axis=1)
+    daily["CTR"] = daily.apply(lambda r: safe_divide(r["点击"], r["曝光"]), axis=1)
+    daily["转化率"] = daily.apply(lambda r: safe_divide(r["成交订单数"], r["点击"]), axis=1)
+
+    goods = detail.groupby("商品ID", as_index=False).agg(
+        推广费=("推广费", "sum"),
+        推广成交金额=("推广成交金额", "sum"),
+        曝光=("曝光", "sum"),
+        点击=("点击", "sum"),
+        成交订单数=("成交订单数", "sum"),
+        活跃天数=("日期", "nunique"),
+    )
+    goods["实际ROI"] = goods.apply(lambda r: safe_divide(r["推广成交金额"], r["推广费"]), axis=1)
+    goods["CTR"] = goods.apply(lambda r: safe_divide(r["点击"], r["曝光"]), axis=1)
+    goods["转化率"] = goods.apply(lambda r: safe_divide(r["成交订单数"], r["点击"]), axis=1)
+    total_spend = goods["推广费"].sum()
+    goods["花费占比"] = goods["推广费"].apply(lambda x: safe_divide(x, total_spend))
+    goods["花费排名"] = goods["推广费"].rank(ascending=False, method="dense").astype(int)
+    goods["ROI排名"] = goods["实际ROI"].rank(ascending=False, method="dense").astype(int)
+    goods["日均推广费"] = goods.apply(lambda r: safe_divide(r["推广费"], r["活跃天数"]), axis=1)
+    goods["日均推广成交金额"] = goods.apply(lambda r: safe_divide(r["推广成交金额"], r["活跃天数"]), axis=1)
+
+    # 关联链接标题
+    title_map = (
+        orders.groupby("商品id")["商品"].agg(lambda s: s.mode().iloc[0] if not s.mode().empty else s.iloc[0]).reset_index()
+    )
+    title_map["商品id"] = title_map["商品id"].astype(str)
+    goods = goods.merge(title_map.rename(columns={"商品id": "商品ID", "商品": "链接标题"}), on="商品ID", how="left")
+
+    detail = detail.sort_values(["商品ID", "日期"])
+
+    # 异常识别
+    spend_q = goods["推广费"].quantile(0.75) if len(goods) else 0
+    roi_q = goods["实际ROI"].quantile(0.25) if len(goods) else 0
+    a1 = goods[(goods["推广费"] >= spend_q) & (goods["实际ROI"] <= roi_q)]
+
+    growth_records = []
+    down_records = []
+    scale_bad_records = []
+    for gid, g in detail.groupby("商品ID"):
+        g = g.sort_values("日期")
+        if len(g) >= 4:
+            first = g.head(max(2, len(g)//3))["推广成交金额"].mean()
+            last = g.tail(max(2, len(g)//3))["推广成交金额"].mean()
+            growth = safe_divide(last - first, first)
+            spend_mean = g["推广费"].mean()
+            growth_records.append({"商品ID": gid, "成交金额增长率": growth, "平均推广费": spend_mean})
+
+        if len(g) >= 3:
+            tail = g.tail(3)["实际ROI"].tolist()
+            if tail[0] > tail[1] > tail[2]:
+                down_records.append({"商品ID": gid, "最近3日ROI": tail})
+
+        if len(g) >= 14:
+            prev = g.iloc[-14:-7]
+            recent = g.iloc[-7:]
+            prev_spend, recent_spend = prev["推广费"].mean(), recent["推广费"].mean()
+            prev_roi, recent_roi = prev["实际ROI"].mean(), recent["实际ROI"].mean()
+            if recent_spend > prev_spend * 1.3 and recent_roi < prev_roi * 0.9:
+                scale_bad_records.append({"商品ID": gid, "近7日平均推广费": recent_spend, "近7日平均ROI": recent_roi})
+
+    growth_df = pd.DataFrame(growth_records)
+    if growth_df.empty:
+        a2 = growth_df
+    else:
+        merged = goods[["商品ID", "推广费"]].merge(growth_df, on="商品ID", how="left")
+        a2 = merged[(merged["推广费"] >= spend_q) & (merged["成交金额增长率"].fillna(0) < 0.05)]
+
+    a3 = pd.DataFrame(down_records)
+    a4 = pd.DataFrame(scale_bad_records)
+
+    return {
+        "daily": daily.sort_values("日期"),
+        "goods": goods.sort_values("推广费", ascending=False),
+        "detail": detail,
+        "anomalies": {
+            "推广费高但ROI低": a1,
+            "推广费高但成交增长不足": a2,
+            "ROI连续下滑": a3,
+            "放量但效率恶化": a4,
+        },
+    }
+
 
 
 def _build_business_alerts(
