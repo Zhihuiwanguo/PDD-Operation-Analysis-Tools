@@ -396,7 +396,10 @@ def _analyze_exceptions(
 
     # 未映射规格：订单 商品ID + 订单销售规格ID 在映射表中不存在
     mapped_pairs = set(zip(link_map["商品ID"], link_map["销售规格ID"]))
-    order_pairs = orders[["订单号", "商品id", "订单销售规格ID", "商品规格", "商品"]].copy()
+    if "订单销售规格ID" not in orders.columns:
+    orders["订单销售规格ID"] = orders["销售规格ID"]
+
+order_pairs = orders[["订单号", "商品id", "订单销售规格ID", "商品规格", "商品"]].copy()
     order_pairs["订单销售规格ID"] = order_pairs["订单销售规格ID"].fillna("").astype(str).str.strip()
     order_pairs["pair_found"] = order_pairs.apply(
         lambda r: (str(r["商品id"]).strip(), str(r["订单销售规格ID"]).strip()) in mapped_pairs,
@@ -453,14 +456,15 @@ def _analyze_exceptions(
     diff_price_items = orders[orders["订单分类"] == "非经营剔除"]["订单号 商品id 商品".split()]
     pending_orders = orders[orders["订单分类"] == "待确认"]["订单号 商品id 售后状态 商品".split()]
 
-    return {
-        "未映射规格": unmapped_specs,
-        "未映射商品ID": unmapped_goods,
-        "重复映射": duplicate_mapping,
-        "有订单无推广费": order_no_promo,
-        "有推广费无订单": promo_no_order,
-        "推广费挂接异常": promo_attach_issues,
-        "链接映射多候选风险": diagnostics.get("链接映射多候选风险", pd.DataFrame()),
-        "差价补款商品": diff_price_items,
-        "待确认订单": pending_orders,
-    }
+    returnreturn {
+    "未映射规格": unmapped_specs,
+    "未映射商品ID": unmapped_goods,
+    "重复映射": duplicate_mapping,
+    "有订单无推广费": order_no_promo,
+    "有推广费无订单": promo_no_order,
+    "推广费挂接异常": promo_attach_issues,
+    "链接映射多候选风险": diagnostics.get("链接映射多候选风险", pd.DataFrame()),
+    "百补字段缺失提示": diagnostics.get("百补字段缺失提示", pd.DataFrame()),
+    "差价补款商品": diff_price_items,
+    "待确认订单": pending_orders,
+}
