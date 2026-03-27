@@ -1,4 +1,4 @@
-"""Streamlit Community Cloud 推荐入口文件。"""
+"""Streamlit Community Cloud 推荐入口文件（建议作为 Main file path）。"""
 
 from __future__ import annotations
 

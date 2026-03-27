@@ -1,5 +1,10 @@
 # Streamlit Community Cloud 部署指南（零基础版）
 
+## 0. 一句话结论（先看这里）
+
+- Streamlit Community Cloud 的 **Main file path 请填写：`streamlit_app.py`**。
+- `app/main.py` 是应用主逻辑文件，不建议直接作为 Cloud 入口。
+
 本文档用于把本项目部署到 **Streamlit Community Cloud**，并尽量避免新手常见报错。
 
 ---
