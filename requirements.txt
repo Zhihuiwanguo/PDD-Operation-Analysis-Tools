@@ -1,6 +1,8 @@
-streamlit
-pandas
-openpyxl
-numpy
-plotly
-xlsxwriter
+streamlit>=1.44
+pandas>=2.2
+openpyxl>=3.1
+numpy>=1.26
+plotly>=5.20
+xlsxwriter>=3.2
+xlrd>=2.0
+python-dateutil>=2.9
