@@ -79,22 +79,39 @@ def _render_uploads() -> dict:
 def _build_global_filters(orders_df: pd.DataFrame) -> dict:
     st.sidebar.header("全局筛选器")
 
-    date_ser = pd.to_datetime(orders_df.get("订单成交时间", "").replace({"\t": ""}), errors="coerce")
+    date_ser = pd.to_datetime(
+        orders_df.get("订单成交时间", "").replace({"\t": ""}),
+        errors="coerce",
+    )
     if "支付时间" in orders_df.columns:
-        pay_ser = pd.to_datetime(orders_df.get("支付时间", "").replace({"\t": ""}), errors="coerce")
+        pay_ser = pd.to_datetime(
+            orders_df.get("支付时间", "").replace({"\t": ""}),
+            errors="coerce",
+        )
         date_ser = date_ser.fillna(pay_ser)
 
     date_ser = date_ser.dropna()
     if not date_ser.empty:
         min_d, max_d = date_ser.min().date(), date_ser.max().date()
-        date_range = st.sidebar.date_input("日期范围（订单成交时间，空值回退支付时间）", value=(min_d, max_d))
+        date_range = st.sidebar.date_input(
+            "日期范围（订单成交时间，空值回退支付时间）",
+            value=(min_d, max_d),
+        )
     else:
         date_range = None
 
-    stores = sorted(orders_df.get("店铺名称", pd.Series(dtype=str)).dropna().astype(str).unique().tolist())
-    products_opt = sorted(orders_df.get("标准产品名称", pd.Series(dtype=str)).dropna().astype(str).unique().tolist())
-    goods_ids = sorted(orders_df.get("商品id", pd.Series(dtype=str)).dropna().astype(str).unique().tolist())
-    bb_opts = sorted(orders_df.get("是否百补", pd.Series(dtype=str)).dropna().astype(str).unique().tolist())
+    stores = sorted(
+        orders_df.get("店铺名称", pd.Series(dtype=str)).dropna().astype(str).unique().tolist()
+    )
+    products_opt = sorted(
+        orders_df.get("标准产品名称", pd.Series(dtype=str)).dropna().astype(str).unique().tolist()
+    )
+    goods_ids = sorted(
+        orders_df.get("商品id", pd.Series(dtype=str)).dropna().astype(str).unique().tolist()
+    )
+    bb_opts = sorted(
+        orders_df.get("是否百补", pd.Series(dtype=str)).dropna().astype(str).unique().tolist()
+    )
 
     selected_stores = st.sidebar.multiselect("店铺名称", stores, default=stores)
     selected_products = st.sidebar.multiselect("标准产品名称", products_opt, default=products_opt)
@@ -102,7 +119,7 @@ def _build_global_filters(orders_df: pd.DataFrame) -> dict:
     selected_bb = st.sidebar.multiselect("是否百补", bb_opts, default=bb_opts)
 
     return {
-        "date_range": date_range if isinstance(date_range, tuple) or isinstance(date_range, list) else None,
+        "date_range": date_range if isinstance(date_range, (tuple, list)) else None,
         "stores": selected_stores,
         "product_names": selected_products,
         "goods_ids": selected_goods,
@@ -122,16 +139,19 @@ def main() -> None:
     st.success("分析完成。")
     st.caption(f"当前日期筛选字段：{ctx['date_field_used']}")
 
-   tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
-    "经营总览",
-    "链接分析",
-    "产品分析",
-    "规格分析",
-    "百补 vs 日常",
-    "推广分析",
-    "经营异常",
-    "异常清单",
-])
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs(
+        [
+            "经营总览",
+            "链接分析",
+            "产品分析",
+            "规格分析",
+            "百补 vs 日常",
+            "推广分析",
+            "经营异常",
+            "异常清单",
+        ]
+    )
+
     with tab1:
         overview.render(ctx["overview"])
     with tab2:
@@ -140,30 +160,31 @@ def main() -> None:
         products.render(ctx["product_summary"])
     with tab4:
         specs.render(ctx["spec_summary"])
-   with tab5:
-    baibu_vs_normal.render(ctx["baibu_vs_normal"])
-with tab6:
-    promotion.render(ctx["promotion_analysis"])
-with tab7:
-    business_alerts.render(ctx["business_alerts"])
-with tab8:
-    exceptions.render(ctx["exceptions"])
+    with tab5:
+        baibu_vs_normal.render(ctx["baibu_vs_normal"])
+    with tab6:
+        promotion.render(ctx["promotion_analysis"])
+    with tab7:
+        business_alerts.render(ctx["business_alerts"])
+    with tab8:
+        exceptions.render(ctx["exceptions"])
 
-   excel_blob = to_excel_bytes(
-    {
-        "经营总览": pd.DataFrame([ctx["overview"]]),
-        "链接分析": ctx["link_summary"],
-        "产品分析": ctx["product_summary"],
-        "规格分析": ctx["spec_summary"],
-        "百补vs日常": ctx["baibu_vs_normal"],
-        "推广分析-每日": ctx["promotion_analysis"]["daily"],
-        "推广分析-商品汇总": ctx["promotion_analysis"]["goods"],
-        "推广分析-单品明细": ctx["promotion_analysis"]["detail"],
-        **{f"推广异常-{k}": v for k, v in ctx["promotion_analysis"]["anomalies"].items()},
-        **{f"经营异常-{k}": v for k, v in ctx["business_alerts"].items()},
-        **{f"异常-{k}": v for k, v in ctx["exceptions"].items()},
-    }
-)
+    excel_blob = to_excel_bytes(
+        {
+            "经营总览": pd.DataFrame([ctx["overview"]]),
+            "链接分析": ctx["link_summary"],
+            "产品分析": ctx["product_summary"],
+            "规格分析": ctx["spec_summary"],
+            "百补vs日常": ctx["baibu_vs_normal"],
+            "推广分析-每日": ctx["promotion_analysis"]["daily"],
+            "推广分析-商品汇总": ctx["promotion_analysis"]["goods"],
+            "推广分析-单品明细": ctx["promotion_analysis"]["detail"],
+            **{f"推广异常-{k}": v for k, v in ctx["promotion_analysis"]["anomalies"].items()},
+            **{f"经营异常-{k}": v for k, v in ctx["business_alerts"].items()},
+            **{f"异常-{k}": v for k, v in ctx["exceptions"].items()},
+        }
+    )
+
     st.download_button(
         "导出结果 Excel（当前筛选结果）",
         data=excel_blob,
