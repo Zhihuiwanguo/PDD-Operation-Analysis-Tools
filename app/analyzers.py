@@ -251,12 +251,30 @@ def _analyze_products(orders: pd.DataFrame, promo_by_product: pd.DataFrame) -> p
 
 def _spec_positioning(row: pd.Series) -> str:
     t = CONFIG.spec_thresholds
-    if row["订单侧估算毛利"] < t.weaken_loss_threshold or row["无效率"] >= t.weaken_invalid_rate_threshold:
+
+    low_scale = (row["有效订单数"] < t.weaken_low_orders_threshold) and (row["销售件数"] < t.weaken_low_sales_qty_threshold)
+    weak_profit = row["订单侧估算毛利"] < t.weaken_loss_threshold
+    if weak_profit or row["无效率"] >= t.weaken_invalid_rate_threshold or low_scale:
         return "弱化规格"
-    if row["订单侧毛利率"] >= t.profit_margin_threshold and row["单均订单侧毛利"] >= t.profit_per_order_threshold:
-        return "利润规格"
-    if row["有效订单数"] >= t.main_push_orders_threshold and row["订单侧毛利率"] >= t.main_push_margin_threshold:
+
+    has_scale = (row["有效订单数"] >= t.main_push_orders_threshold) or (row["销售件数"] >= t.main_push_sales_qty_threshold)
+    has_profit_base = (row["订单侧毛利率"] >= t.main_push_margin_threshold) and (
+        row["单均订单侧毛利"] >= t.main_push_avg_profit_threshold
+    )
+    if has_scale and has_profit_base:
         return "主推规格"
+
+    high_volume_low_profit = (row["销售件数"] >= t.traffic_sales_qty_threshold) and (
+        row["单均订单侧毛利"] <= t.traffic_avg_profit_upper
+    )
+    if high_volume_low_profit:
+        return "引流规格"
+
+    if (row["订单侧毛利率"] >= t.profit_margin_threshold) and (
+        row["单均订单侧毛利"] >= t.profit_per_order_threshold
+    ):
+        return "利润规格"
+
     return "引流规格"
 
 

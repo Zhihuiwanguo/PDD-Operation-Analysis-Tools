@@ -4,10 +4,37 @@ from __future__ import annotations
 
 import streamlit as st
 
+from app.config import CONFIG
 
-def _conclusion(row) -> str:
-    margin = (row["扣推广后贡献毛利"] / row["商家实收"]) if row["商家实收"] else 0
-    return "更偏利润" if margin >= 0.15 else "更偏规模"
+
+def _efficiency_score(row) -> float:
+    breakeven = row.get("盈亏平衡ROI", 0) or 0
+    actual = row.get("实际ROI", 0) or 0
+    return actual / breakeven if breakeven else 0
+
+
+def _build_conclusion(side_row, other_row) -> str:
+    t = CONFIG.baibu_conclusion_thresholds
+
+    scale_adv = (
+        side_row["有效订单数"] >= other_row["有效订单数"] * t.scale_advantage_ratio
+        and side_row["商家实收"] >= other_row["商家实收"] * t.scale_advantage_ratio
+    )
+
+    eff_side = _efficiency_score(side_row)
+    eff_other = _efficiency_score(other_row)
+    profit_adv = (
+        side_row["扣推广后贡献毛利"] >= other_row["扣推广后贡献毛利"] * t.profit_advantage_ratio
+        or eff_side >= eff_other + t.efficiency_advantage_delta
+    )
+
+    if scale_adv and profit_adv:
+        return "规模与利润效率均占优"
+    if scale_adv and not profit_adv:
+        return "更偏规模，但利润效率偏弱"
+    if (not scale_adv) and profit_adv:
+        return "规模较小，但利润效率更优"
+    return "规模与利润效率均不占优"
 
 
 def render(compare_df):
@@ -32,8 +59,12 @@ def render(compare_df):
         use_container_width=True,
     )
 
-    decisions = {row["是否百补"]: _conclusion(row) for _, row in compare_df.iterrows()}
-    bb = decisions.get("是", "暂无数据")
-    normal = decisions.get("否", "暂无数据")
-    st.markdown(f"- 百补盘：**{bb}**")
-    st.markdown(f"- 日常盘：**{normal}**")
+    rows = {row["是否百补"]: row for _, row in compare_df.iterrows()}
+    bb_row = rows.get("是")
+    normal_row = rows.get("否")
+
+    if bb_row is not None and normal_row is not None:
+        st.markdown(f"- 百补盘：**{_build_conclusion(bb_row, normal_row)}**")
+        st.markdown(f"- 日常盘：**{_build_conclusion(normal_row, bb_row)}**")
+    else:
+        st.info("当前筛选范围内百补/日常数据不完整，暂无法生成对比结论。")

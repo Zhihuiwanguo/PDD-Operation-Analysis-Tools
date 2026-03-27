@@ -27,11 +27,27 @@ class BusinessRules:
 @dataclass(frozen=True)
 class SpecSuggestionThresholds:
     weaken_loss_threshold: float = 0.0
-    weaken_invalid_rate_threshold: float = 0.45
-    profit_margin_threshold: float = 0.35
-    profit_per_order_threshold: float = 8.0
-    main_push_orders_threshold: int = 100
-    main_push_margin_threshold: float = 0.15
+    weaken_invalid_rate_threshold: float = 0.40
+    weaken_low_orders_threshold: int = 20
+    weaken_low_sales_qty_threshold: float = 30
+
+    main_push_orders_threshold: int = 80
+    main_push_sales_qty_threshold: float = 120
+    main_push_margin_threshold: float = 0.18
+    main_push_avg_profit_threshold: float = 6.0
+
+    traffic_sales_qty_threshold: float = 150
+    traffic_avg_profit_upper: float = 5.5
+
+    profit_margin_threshold: float = 0.40
+    profit_per_order_threshold: float = 10.0
+
+
+@dataclass(frozen=True)
+class BaibuConclusionThresholds:
+    scale_advantage_ratio: float = 1.2
+    profit_advantage_ratio: float = 1.1
+    efficiency_advantage_delta: float = 0.1
 
 
 @dataclass(frozen=True)
@@ -49,6 +65,7 @@ class AlertThresholds:
 class AppConfig:
     business_rules: BusinessRules = field(default_factory=BusinessRules)
     spec_thresholds: SpecSuggestionThresholds = field(default_factory=SpecSuggestionThresholds)
+    baibu_conclusion_thresholds: BaibuConclusionThresholds = field(default_factory=BaibuConclusionThresholds)
     alert_thresholds: AlertThresholds = field(default_factory=AlertThresholds)
     sample_data_dir: str = field(default_factory=lambda: str(Path(__file__).resolve().parent.parent / "sample_data"))
 
