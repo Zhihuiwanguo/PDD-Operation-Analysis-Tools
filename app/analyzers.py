@@ -412,6 +412,7 @@ def _analyze_exceptions(
             orders[col] = ""
 
     orders["商品id"] = orders["商品id"].fillna("").astype(str).str.strip()
+    orders["销售规格ID"] = orders["销售规格ID"].fillna("").astype(str).str.strip()
     orders["订单销售规格ID"] = orders["订单销售规格ID"].fillna("").astype(str).str.strip()
 
     # 未映射规格：按 商品ID + 订单销售规格ID 判断
@@ -433,40 +434,42 @@ def _analyze_exceptions(
     unmapped_specs = unmapped_specs[unmapped_specs["_merge"] == "left_only"].drop(columns=["_merge"])
 
     mapped_ids = set(link_map["商品ID"].tolist())
-    order_ids = set(orders["商品id"].fillna("").astype(str).str.strip().tolist())
-    promo_ids = set(promo_by_product["商品ID"].fillna("").astype(str).str.strip().tolist()) if "商品ID" in promo_by_product.columns else set()
+    order_ids = set(orders["商品id"].tolist())
+    promo_ids = (
+        set(promo_by_product["商品ID"].fillna("").astype(str).str.strip().tolist())
+        if "商品ID" in promo_by_product.columns
+        else set()
+    )
 
     unmapped_goods = pd.DataFrame(
         sorted(x for x in (order_ids | promo_ids) - mapped_ids if x),
         columns=["商品ID"],
     )
 
+    # 重复映射：只按 商品ID + 销售规格ID pair 判定
+    link_map_for_dup = link_map.copy()
+
+    if "商品ID" not in link_map_for_dup.columns:
+        link_map_for_dup["商品ID"] = ""
+    if "销售规格ID" not in link_map_for_dup.columns:
+        link_map_for_dup["销售规格ID"] = ""
+
+    link_map_for_dup["商品ID"] = (
+        link_map_for_dup["商品ID"].fillna("").astype(str).str.strip()
+    )
+    link_map_for_dup["销售规格ID"] = (
+        link_map_for_dup["销售规格ID"].fillna("").astype(str).str.strip()
+    )
+
+    link_map_for_dup = link_map_for_dup[
+        (link_map_for_dup["商品ID"] != "") & (link_map_for_dup["销售规格ID"] != "")
+    ].copy()
+
     duplicate_mapping = (
-        link_map_for_dup = link_map.copy()
-
-if "商品ID" not in link_map_for_dup.columns:
-    link_map_for_dup["商品ID"] = ""
-if "销售规格ID" not in link_map_for_dup.columns:
-    link_map_for_dup["销售规格ID"] = ""
-
-link_map_for_dup["商品ID"] = (
-    link_map_for_dup["商品ID"].fillna("").astype(str).str.strip()
-)
-link_map_for_dup["销售规格ID"] = (
-    link_map_for_dup["销售规格ID"].fillna("").astype(str).str.strip()
-)
-
-# 过滤空商品ID / 空销售规格ID，避免脏值误报
-link_map_for_dup = link_map_for_dup[
-    (link_map_for_dup["商品ID"] != "") & (link_map_for_dup["销售规格ID"] != "")
-].copy()
-
-duplicate_mapping = (
-    link_map_for_dup.groupby(["商品ID", "销售规格ID"], dropna=False)
-    .size()
-    .reset_index(name="重复数")
-    .query("重复数 > 1")
-)
+        link_map_for_dup.groupby(["商品ID", "销售规格ID"], dropna=False)
+        .size()
+        .reset_index(name="重复数")
+        .query("重复数 > 1")
     )
 
     valid_orders = orders[orders["订单分类"] == "有效"].copy()
