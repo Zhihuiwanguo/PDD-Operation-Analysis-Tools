@@ -465,18 +465,8 @@ def _analyze_exceptions(
     )
 
     link_map_for_dup = link_map.copy()
-    if "商品ID" not in link_map_for_dup.columns:
-        link_map_for_dup["商品ID"] = ""
-    if "销售规格ID" not in link_map_for_dup.columns:
-        link_map_for_dup["销售规格ID"] = ""
-
-    link_map_for_dup["商品ID"] = (
-        link_map_for_dup["商品ID"].fillna("").astype(str).str.strip()
-    )
-    link_map_for_dup["销售规格ID"] = (
-        link_map_for_dup["销售规格ID"].fillna("").astype(str).str.strip()
-    )
-
+    link_map_for_dup["商品ID"] = link_map_for_dup["商品ID"].fillna("").astype(str).str.strip()
+    link_map_for_dup["销售规格ID"] = link_map_for_dup["销售规格ID"].fillna("").astype(str).str.strip()
     link_map_for_dup = link_map_for_dup[
         (link_map_for_dup["商品ID"] != "") & (link_map_for_dup["销售规格ID"] != "")
     ].copy()
@@ -565,23 +555,23 @@ def _prepare_promotion_base(promo_df: pd.DataFrame) -> pd.DataFrame:
     else:
         out["日期"] = pd.to_datetime(out[date_col], errors="coerce")
 
-    spend_col = _pick_first_existing(out, ["实际成交花费(元)", "实际成交花费", "花费"])
+    spend_col = _pick_first_existing(out, ["实际成交花费", "实际成交花费(元)"])
     if spend_col is None:
-        out["推广费"] = 0.0
+        out["实际成交花费"] = 0.0
     else:
-        out["推广费"] = _safe_numeric(out[spend_col])
+        out["实际成交花费"] = _safe_numeric(out[spend_col])
 
-    roi_col = _pick_first_existing(out, ["实际ROI", "实际投产比", "投产比"])
-    if roi_col is None:
-        out["实际ROI"] = 0.0
+    settle_amt_col = _pick_first_existing(out, ["结算金额", "结算金额(元)"])
+    if settle_amt_col is None:
+        out["结算金额"] = 0.0
     else:
-        out["实际ROI"] = _safe_numeric(out[roi_col])
+        out["结算金额"] = _safe_numeric(out[settle_amt_col])
 
-    gmv_col = _pick_first_existing(out, ["成交金额", "支付成交金额", "推广成交金额", "交易额"])
-    if gmv_col is None:
-        out["推广成交金额"] = out["实际ROI"] * out["推广费"]
+    settle_roi_col = _pick_first_existing(out, ["结算投产比"])
+    if settle_roi_col is None:
+        out["结算投产比"] = 0.0
     else:
-        out["推广成交金额"] = _safe_numeric(out[gmv_col])
+        out["结算投产比"] = _safe_numeric(out[settle_roi_col])
 
     imp_col = _pick_first_existing(out, ["曝光量", "曝光", "展现量"])
     clk_col = _pick_first_existing(out, ["点击量", "点击"])
@@ -609,8 +599,8 @@ def _analyze_promotion(promo_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
     daily = (
         base.groupby("日期", dropna=False)
         .agg(
-            推广费=("推广费", "sum"),
-            推广成交金额=("推广成交金额", "sum"),
+            实际成交花费=("实际成交花费", "sum"),
+            结算金额=("结算金额", "sum"),
             推广商品ID数=("商品ID", lambda s: int(pd.Series(s).replace("", np.nan).dropna().nunique())),
             曝光=("曝光", "sum"),
             点击=("点击", "sum"),
@@ -618,7 +608,7 @@ def _analyze_promotion(promo_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
         )
         .reset_index()
     )
-    daily["每日推广ROI"] = daily.apply(lambda r: safe_divide(r["推广成交金额"], r["推广费"]), axis=1)
+    daily["结算投产比"] = daily.apply(lambda r: safe_divide(r["结算金额"], r["实际成交花费"]), axis=1)
     daily["CTR"] = daily.apply(lambda r: safe_divide(r["点击"], r["曝光"]), axis=1)
     daily["转化率"] = daily.apply(lambda r: safe_divide(r["成交订单数"], r["点击"]), axis=1)
     daily = daily.sort_values("日期")
@@ -627,8 +617,8 @@ def _analyze_promotion(promo_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
         base.groupby("商品ID", dropna=False)
         .agg(
             链接标题=("链接标题", "first"),
-            推广费=("推广费", "sum"),
-            推广成交金额=("推广成交金额", "sum"),
+            实际成交花费=("实际成交花费", "sum"),
+            结算金额=("结算金额", "sum"),
             曝光=("曝光", "sum"),
             点击=("点击", "sum"),
             成交订单数=("成交订单数", "sum"),
@@ -636,45 +626,45 @@ def _analyze_promotion(promo_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
         )
         .reset_index()
     )
-    goods["实际ROI"] = goods.apply(lambda r: safe_divide(r["推广成交金额"], r["推广费"]), axis=1)
+    goods["结算投产比"] = goods.apply(lambda r: safe_divide(r["结算金额"], r["实际成交花费"]), axis=1)
     goods["CTR"] = goods.apply(lambda r: safe_divide(r["点击"], r["曝光"]), axis=1)
     goods["转化率"] = goods.apply(lambda r: safe_divide(r["成交订单数"], r["点击"]), axis=1)
 
-    total_spend = goods["推广费"].sum()
-    goods["花费占比"] = goods.apply(lambda r: safe_divide(r["推广费"], total_spend), axis=1)
-    goods["花费排名"] = goods["推广费"].rank(method="dense", ascending=False).astype(int)
-    goods["ROI排名"] = goods["实际ROI"].rank(method="dense", ascending=False).astype(int)
-    goods["日均推广费"] = goods.apply(lambda r: safe_divide(r["推广费"], r["投放天数"]), axis=1)
-    goods["日均推广成交金额"] = goods.apply(lambda r: safe_divide(r["推广成交金额"], r["投放天数"]), axis=1)
-    goods = goods.sort_values("推广费", ascending=False)
+    total_spend = goods["实际成交花费"].sum()
+    goods["花费占比"] = goods.apply(lambda r: safe_divide(r["实际成交花费"], total_spend), axis=1)
+    goods["花费排名"] = goods["实际成交花费"].rank(method="dense", ascending=False).astype(int)
+    goods["ROI排名"] = goods["结算投产比"].rank(method="dense", ascending=False).astype(int)
+    goods["日均实际成交花费"] = goods.apply(lambda r: safe_divide(r["实际成交花费"], r["投放天数"]), axis=1)
+    goods["日均结算金额"] = goods.apply(lambda r: safe_divide(r["结算金额"], r["投放天数"]), axis=1)
+    goods = goods.sort_values("实际成交花费", ascending=False)
 
     detail = (
         base.groupby(["日期", "商品ID"], dropna=False)
         .agg(
             链接标题=("链接标题", "first"),
-            推广费=("推广费", "sum"),
-            推广成交金额=("推广成交金额", "sum"),
+            实际成交花费=("实际成交花费", "sum"),
+            结算金额=("结算金额", "sum"),
             曝光=("曝光", "sum"),
             点击=("点击", "sum"),
             成交订单数=("成交订单数", "sum"),
         )
         .reset_index()
     )
-    detail["实际ROI"] = detail.apply(lambda r: safe_divide(r["推广成交金额"], r["推广费"]), axis=1)
+    detail["结算投产比"] = detail.apply(lambda r: safe_divide(r["结算金额"], r["实际成交花费"]), axis=1)
     detail["CTR"] = detail.apply(lambda r: safe_divide(r["点击"], r["曝光"]), axis=1)
     detail["转化率"] = detail.apply(lambda r: safe_divide(r["成交订单数"], r["点击"]), axis=1)
     detail = detail.sort_values(["商品ID", "日期"], ascending=[True, True])
 
-    spend_median = goods["推广费"].median() if len(goods) else 0
-    roi_median = goods["实际ROI"].median() if len(goods) else 0
+    spend_median = goods["实际成交花费"].median() if len(goods) else 0
+    roi_median = goods["结算投产比"].median() if len(goods) else 0
 
     high_spend_low_roi = goods[
-        (goods["推广费"] >= spend_median) & (goods["实际ROI"] < roi_median)
+        (goods["实际成交花费"] >= spend_median) & (goods["结算投产比"] < roi_median)
     ].copy()
 
-    high_spend_low_gmv = goods[
-        (goods["推广费"] >= spend_median)
-        & (goods["推广成交金额"] < goods["推广费"] * 1.2)
+    high_spend_low_settle = goods[
+        (goods["实际成交花费"] >= spend_median)
+        & (goods["结算金额"] < goods["实际成交花费"] * 1.2)
     ].copy()
 
     detail_sorted = detail.sort_values(["商品ID", "日期"])
@@ -682,7 +672,7 @@ def _analyze_promotion(promo_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
     for goods_id, grp in detail_sorted.groupby("商品ID"):
         g = grp.dropna(subset=["日期"]).tail(3)
         if len(g) == 3:
-            vals = g["实际ROI"].tolist()
+            vals = g["结算投产比"].tolist()
             if vals[0] > vals[1] > vals[2]:
                 roi_drop_rows.append(g.iloc[-1])
     roi_continuous_down = pd.DataFrame(roi_drop_rows)
@@ -693,15 +683,15 @@ def _analyze_promotion(promo_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
         if len(g) >= 3:
             last = g.iloc[-1]
             prev = g.iloc[:-1]
-            prev_spend_mean = prev["推广费"].mean()
-            prev_roi_mean = prev["实际ROI"].mean()
-            if last["推广费"] > prev_spend_mean * 1.5 and last["实际ROI"] < prev_roi_mean * 0.8:
+            prev_spend_mean = prev["实际成交花费"].mean()
+            prev_roi_mean = prev["结算投产比"].mean()
+            if last["实际成交花费"] > prev_spend_mean * 1.5 and last["结算投产比"] < prev_roi_mean * 0.8:
                 scale_bad_rows.append(last)
     scale_up_but_worse = pd.DataFrame(scale_bad_rows)
 
     anomalies = {
         "高花费低ROI商品": high_spend_low_roi,
-        "高花费低成交商品": high_spend_low_gmv,
+        "高花费低结算金额商品": high_spend_low_settle,
         "ROI连续下滑商品": roi_continuous_down,
         "放量但效率恶化商品": scale_up_but_worse,
     }
