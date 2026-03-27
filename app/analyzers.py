@@ -411,11 +411,16 @@ def _analyze_exceptions(
     mapped_ids = set(link_map["商品ID"].astype(str).str.strip().tolist())
     unmapped_goods = pd.DataFrame(sorted((order_ids | promo_ids) - mapped_ids), columns=["商品ID"])
 
-    duplicate_mapping = (
-        link_map.groupby(["商品ID", "销售规格ID"]).size().reset_index(name="重复数").query("重复数 > 1")
-        if {"商品ID", "销售规格ID"}.issubset(link_map.columns)
-        else pd.DataFrame(columns=["商品ID", "销售规格ID", "重复数"])
-    )
+    # 重复映射判定口径：仅当“同一商品ID + 同一销售规格ID”出现多条时才算重复。
+    duplicate_mapping = pd.DataFrame(columns=["商品ID", "销售规格ID", "重复数"])
+    if {"商品ID", "销售规格ID"}.issubset(link_map.columns):
+        pair_df = link_map[["商品ID", "销售规格ID"]].copy()
+        pair_df["商品ID"] = pair_df["商品ID"].fillna("").astype(str).str.strip()
+        pair_df["销售规格ID"] = pair_df["销售规格ID"].fillna("").astype(str).str.strip()
+        pair_df = pair_df[(pair_df["商品ID"] != "") & (pair_df["销售规格ID"] != "")]
+        duplicate_mapping = (
+            pair_df.groupby(["商品ID", "销售规格ID"]).size().reset_index(name="重复数").query("重复数 > 1")
+        )
 
     # 基于有效订单判断“有订单无推广费”
     effective_orders = orders[orders["订单分类"] == "有效"]
