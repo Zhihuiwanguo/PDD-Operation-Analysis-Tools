@@ -28,10 +28,12 @@
 3. 按下列信息填写：
 
 - **Repository（仓库）**：选择你的项目仓库（本项目）
-- **Branch（分支）**：`work`（如果你最终合并到 `main`，则填 `main`）
+- **Branch（分支）**：`main`（推荐，保持和线上稳定版本一致）
 - **Main file path（主文件路径）**：`streamlit_app.py`（推荐）
 
 4. 点击 **Deploy**。
+
+> 如必须从功能分支部署，请明确选择对应分支名，并确认该分支也包含 `streamlit_app.py`。
 
 ---
 
