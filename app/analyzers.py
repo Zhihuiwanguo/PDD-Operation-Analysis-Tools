@@ -396,8 +396,15 @@ def _analyze_exceptions(
 
     # 未映射规格：订单 商品ID + 订单销售规格ID 在映射表中不存在
     mapped_pairs = set(zip(link_map["商品ID"], link_map["销售规格ID"]))
-    if "订单销售规格ID" not in orders.columns:
+    if "销售规格ID" not in orders.columns:
+    orders["销售规格ID"] = ""
+
+if "订单销售规格ID" not in orders.columns:
     orders["订单销售规格ID"] = orders["销售规格ID"]
+
+for col in ["订单号", "商品id", "商品规格", "商品"]:
+    if col not in orders.columns:
+        orders[col] = ""
 
 order_pairs = orders[["订单号", "商品id", "订单销售规格ID", "商品规格", "商品"]].copy()
     order_pairs["订单销售规格ID"] = order_pairs["订单销售规格ID"].fillna("").astype(str).str.strip()
