@@ -27,37 +27,41 @@ def build_analysis_context(
 
     if filters and filters.get("goods_ids"):
         allow_ids = set(map(str, filters["goods_ids"]))
-        promo_by_product = promo_by_product[promo_by_product["商品ID"].astype(str).isin(allow_ids)]
+        promo_by_product = promo_by_product[
+            promo_by_product["商品ID"].astype(str).isin(allow_ids)
+        ]
 
     if filters and any(filters.get(k) for k in ["stores", "product_names", "goods_ids", "baibu"]):
         order_goods = set(orders["商品id"].astype(str).tolist())
-        promo_by_product = promo_by_product[promo_by_product["商品ID"].astype(str).isin(order_goods)]
+        promo_by_product = promo_by_product[
+            promo_by_product["商品ID"].astype(str).isin(order_goods)
+        ]
 
     cashflow_df = _apply_cashflow_filters(tables["cashflow"], filters)
     cash_spend = calc_store_cash_spend(cashflow_df)
 
-   link_summary = _analyze_links(orders, promo_by_product)
-product_summary = _analyze_products(orders, promo_by_product)
-spec_summary = _analyze_specs(orders)
-baibu_vs_normal = _analyze_baibu_vs_normal(orders, promo_by_product)
-promotion_analysis = _analyze_promotion(promo_df)
-business_alerts = _build_business_alerts(link_summary, product_summary, spec_summary)
-overview = _analyze_overview(orders, cash_spend)
-exceptions = _analyze_exceptions(tables, orders, promo_by_product, diagnostics)
+    link_summary = _analyze_links(orders, promo_by_product)
+    product_summary = _analyze_products(orders, promo_by_product)
+    spec_summary = _analyze_specs(orders)
+    baibu_vs_normal = _analyze_baibu_vs_normal(orders, promo_by_product)
+    promotion_analysis = _analyze_promotion(promo_df)
+    business_alerts = _build_business_alerts(link_summary, product_summary, spec_summary)
+    overview = _analyze_overview(orders, cash_spend)
+    exceptions = _analyze_exceptions(tables, orders, promo_by_product, diagnostics)
 
     return {
-    "orders_enriched": orders,
-    "link_summary": link_summary,
-    "product_summary": product_summary,
-    "spec_summary": spec_summary,
-    "baibu_vs_normal": baibu_vs_normal,
-    "promotion_analysis": promotion_analysis,
-    "business_alerts": business_alerts,
-    "overview": overview,
-    "exceptions": exceptions,
-    "store_cash_spend": cash_spend,
-    "date_field_used": "订单成交时间(为空回退支付时间)",
-}
+        "orders_enriched": orders,
+        "link_summary": link_summary,
+        "product_summary": product_summary,
+        "spec_summary": spec_summary,
+        "baibu_vs_normal": baibu_vs_normal,
+        "promotion_analysis": promotion_analysis,
+        "business_alerts": business_alerts,
+        "overview": overview,
+        "exceptions": exceptions,
+        "store_cash_spend": cash_spend,
+        "date_field_used": "订单成交时间(为空回退支付时间)",
+    }
 
 
 
