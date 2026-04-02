@@ -6,6 +6,17 @@ import pandas as pd
 import streamlit as st
 
 
+def _format_percent_columns(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+    if df is None or df.empty:
+        return df
+
+    out = df.copy()
+    for col in columns:
+        if col in out.columns:
+            out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0.0).map(lambda x: f"{x:.2%}")
+    return out
+
+
 def render(promotion_analysis: dict):
     st.subheader("推广分析")
 
@@ -38,7 +49,8 @@ def render(promotion_analysis: dict):
             ]
             if c in daily.columns
         ]
-        st.dataframe(daily[daily_show_cols], use_container_width=True)
+        daily_show = _format_percent_columns(daily[daily_show_cols], ["CTR", "转化率"])
+        st.dataframe(daily_show, use_container_width=True)
 
         if "日期" in daily.columns:
             chart_df = daily.copy().sort_values("日期")
@@ -86,7 +98,8 @@ def render(promotion_analysis: dict):
             ]
             if c in goods.columns
         ]
-        st.dataframe(goods[goods_show_cols], use_container_width=True)
+        goods_show = _format_percent_columns(goods[goods_show_cols], ["CTR", "转化率", "花费占比"])
+        st.dataframe(goods_show, use_container_width=True)
 
     st.markdown("---")
     st.markdown("### 三、单个商品ID趋势分析")
@@ -123,7 +136,8 @@ def render(promotion_analysis: dict):
                 ]
                 if c in selected_detail.columns
             ]
-            st.dataframe(selected_detail[show_cols], use_container_width=True)
+            selected_detail_show = _format_percent_columns(selected_detail[show_cols], ["CTR", "转化率"])
+            st.dataframe(selected_detail_show, use_container_width=True)
 
             if "日期" in selected_detail.columns:
                 selected_detail = selected_detail.sort_values("日期")
@@ -190,4 +204,5 @@ def render(promotion_analysis: dict):
                     ]
                     if c in df.columns
                 ]
-                st.dataframe(df[show_cols], use_container_width=True)
+                df_show = _format_percent_columns(df[show_cols], ["CTR", "转化率", "花费占比"])
+                st.dataframe(df_show, use_container_width=True)
