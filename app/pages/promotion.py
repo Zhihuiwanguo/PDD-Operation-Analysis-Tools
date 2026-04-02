@@ -13,7 +13,11 @@ def _format_percent_columns(df: pd.DataFrame, columns: list[str]) -> pd.DataFram
     out = df.copy()
     for col in columns:
         if col in out.columns:
-            out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0.0).map(lambda x: f"{x:.2%}")
+            out[col] = (
+                pd.to_numeric(out[col], errors="coerce")
+                .fillna(0.0)
+                .map(lambda x: f"{x:.2%}")
+            )
     return out
 
 
