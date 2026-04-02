@@ -73,12 +73,12 @@ def _apply_order_filters(orders: pd.DataFrame, filters: dict | None) -> pd.DataF
     if "订单成交时间" not in out.columns:
         out["订单成交时间"] = ""
     out["__筛选日期"] = pd.to_datetime(
-        out["订单成交时间"].replace({"\t": ""}),
+        out["订单成交时间"].replace({"\\t": ""}),
         errors="coerce",
     )
 
     if "支付时间" in out.columns:
-        pay_time = pd.to_datetime(out["支付时间"].replace({"\t": ""}), errors="coerce")
+        pay_time = pd.to_datetime(out["支付时间"].replace({"\\t": ""}), errors="coerce")
         out["__筛选日期"] = out["__筛选日期"].fillna(pay_time)
 
     date_range = filters.get("date_range")
@@ -142,25 +142,69 @@ def _apply_cashflow_filters(cashflow_df: pd.DataFrame, filters: dict | None) -> 
     return out
 
 
-def _analyze_overview(orders: pd.DataFrame, cash_spend: float) -> dict[str, float]:
-    valid_orders = orders[orders["订单分类"] == "有效"]
+def _build_overview_daily_trend(valid_orders: pd.DataFrame) -> pd.DataFrame:
+    if valid_orders.empty:
+        return pd.DataFrame(columns=["日期", "商家实收", "客户实付"])
+
+    out = valid_orders.copy()
+
+    if "订单成交时间" not in out.columns:
+        out["订单成交时间"] = ""
+
+    out["日期"] = pd.to_datetime(
+        out["订单成交时间"].replace({"\\t": ""}),
+        errors="coerce",
+    )
+
+    if "支付时间" in out.columns:
+        pay_time = pd.to_datetime(out["支付时间"].replace({"\\t": ""}), errors="coerce")
+        out["日期"] = out["日期"].fillna(pay_time)
+
+    out["日期"] = out["日期"].dt.normalize()
+    out = out.dropna(subset=["日期"])
+
+    if out.empty:
+        return pd.DataFrame(columns=["日期", "商家实收", "客户实付"])
+
+    daily = (
+        out.groupby("日期", dropna=False)
+        .agg(
+            商家实收=("商家实收金额(元)", "sum"),
+            客户实付=("用户实付金额(元)", "sum"),
+        )
+        .reset_index()
+        .sort_values("日期")
+    )
+    return daily
+
+
+def _analyze_overview(orders: pd.DataFrame, cash_spend: float) -> dict:
+    valid_orders = orders[orders["订单分类"] == "有效"].copy()
     total_user_pay = valid_orders["用户实付金额(元)"].sum()
     total_merchant_income = valid_orders["商家实收金额(元)"].sum()
     gross_profit = valid_orders["订单侧估算毛利"].sum()
+    valid_order_count = int((orders["订单分类"] == "有效").sum())
+    daily_trend = _build_overview_daily_trend(valid_orders)
 
-    return {
+    metrics = {
         "总订单数": int(len(orders)),
-        "有效订单数": int((orders["订单分类"] == "有效").sum()),
+        "有效订单数": valid_order_count,
         "无效订单数": int((orders["订单分类"] == "无效").sum()),
         "待确认订单数": int((orders["订单分类"] == "待确认").sum()),
         "非经营剔除订单数": int((orders["订单分类"] == "非经营剔除").sum()),
         "用户实付": float(total_user_pay),
         "商家实收": float(total_merchant_income),
+        "客单价": float(safe_divide(total_merchant_income, valid_order_count)),
         "订单侧估算毛利": float(gross_profit),
         "店铺总盘推广费（现金口径）": float(cash_spend),
         "店铺整体实际ROI": safe_divide(total_merchant_income, cash_spend),
         "店铺扣推广后贡献毛利": float(gross_profit - cash_spend),
         "盈亏平衡ROI": safe_divide(total_merchant_income, gross_profit),
+    }
+
+    return {
+        "metrics": metrics,
+        "daily_trend": daily_trend,
     }
 
 
@@ -514,8 +558,12 @@ def _analyze_exceptions(
         promo_attach_issues["挂接异常原因"] = promo_attach_issues["商品ID"].apply(_attach_reason)
         promo_attach_issues = promo_attach_issues[promo_attach_issues["挂接异常原因"] != ""]
 
-    diff_price_items = orders[orders["订单分类"] == "非经营剔除"][["订单号", "商品id", "商品"]]
-    pending_orders = orders[orders["订单分类"] == "待确认"][["订单号", "商品id", "售后状态", "商品"]]
+    diff_price_items = orders[orders["订单分类"] == "非经营剔除"][
+        ["订单号", "商品id", "商品"]
+    ]
+    pending_orders = orders[orders["订单分类"] == "待确认"][
+        ["订单号", "商品id", "售后状态", "商品"]
+    ]
 
     return {
         "未映射规格": unmapped_specs,
