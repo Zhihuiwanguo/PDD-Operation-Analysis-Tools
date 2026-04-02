@@ -80,12 +80,12 @@ def _build_global_filters(orders_df: pd.DataFrame) -> dict:
     st.sidebar.header("全局筛选器")
 
     date_ser = pd.to_datetime(
-        orders_df.get("订单成交时间", "").replace({"\t": ""}),
+        orders_df.get("订单成交时间", "").replace({"\\t": ""}),
         errors="coerce",
     )
     if "支付时间" in orders_df.columns:
         pay_ser = pd.to_datetime(
-            orders_df.get("支付时间", "").replace({"\t": ""}),
+            orders_df.get("支付时间", "").replace({"\\t": ""}),
             errors="coerce",
         )
         date_ser = date_ser.fillna(pay_ser)
@@ -171,7 +171,8 @@ def main() -> None:
 
     excel_blob = to_excel_bytes(
         {
-            "经营总览": pd.DataFrame([ctx["overview"]]),
+            "经营总览": pd.DataFrame([ctx["overview"]["metrics"]]),
+            "经营总览-每日趋势": ctx["overview"]["daily_trend"],
             "链接分析": ctx["link_summary"],
             "产品分析": ctx["product_summary"],
             "规格分析": ctx["spec_summary"],
