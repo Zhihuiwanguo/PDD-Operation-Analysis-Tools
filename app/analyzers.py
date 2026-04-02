@@ -73,12 +73,12 @@ def _apply_order_filters(orders: pd.DataFrame, filters: dict | None) -> pd.DataF
     if "订单成交时间" not in out.columns:
         out["订单成交时间"] = ""
     out["__筛选日期"] = pd.to_datetime(
-        out["订单成交时间"].replace({"\\t": ""}),
+        out["订单成交时间"].replace({"\t": ""}),
         errors="coerce",
     )
 
     if "支付时间" in out.columns:
-        pay_time = pd.to_datetime(out["支付时间"].replace({"\\t": ""}), errors="coerce")
+        pay_time = pd.to_datetime(out["支付时间"].replace({"\t": ""}), errors="coerce")
         out["__筛选日期"] = out["__筛选日期"].fillna(pay_time)
 
     date_range = filters.get("date_range")
@@ -152,12 +152,12 @@ def _build_overview_daily_trend(valid_orders: pd.DataFrame) -> pd.DataFrame:
         out["订单成交时间"] = ""
 
     out["日期"] = pd.to_datetime(
-        out["订单成交时间"].replace({"\\t": ""}),
+        out["订单成交时间"].replace({"\t": ""}),
         errors="coerce",
     )
 
     if "支付时间" in out.columns:
-        pay_time = pd.to_datetime(out["支付时间"].replace({"\\t": ""}), errors="coerce")
+        pay_time = pd.to_datetime(out["支付时间"].replace({"\t": ""}), errors="coerce")
         out["日期"] = out["日期"].fillna(pay_time)
 
     out["日期"] = out["日期"].dt.normalize()
@@ -276,6 +276,9 @@ def _analyze_products(orders: pd.DataFrame, promo_by_product: pd.DataFrame) -> p
 
     counts = orders.groupby("标准产品名称", dropna=False).agg(
         有效订单数=("订单分类", lambda s: int((s == "有效").sum())),
+        无效订单数=("订单分类", lambda s: int((s == "无效").sum())),
+        待确认订单数=("订单分类", lambda s: int((s == "待确认").sum())),
+        非经营剔除订单数=("订单分类", lambda s: int((s == "非经营剔除").sum())),
     ).reset_index()
 
     metrics = valid_orders.groupby("标准产品名称", dropna=False).agg(
@@ -288,10 +291,63 @@ def _analyze_products(orders: pd.DataFrame, promo_by_product: pd.DataFrame) -> p
         订单侧估算毛利=("订单侧估算毛利", "sum"),
     ).reset_index()
 
+    baibu_metrics = (
+        valid_orders.groupby(["标准产品名称", "是否百补"], dropna=False)
+        .agg(
+            商家实收=("商家实收金额(元)", "sum"),
+            有效订单数=("订单号", "count"),
+        )
+        .reset_index()
+    )
+
+    if baibu_metrics.empty:
+        baibu_pivot = pd.DataFrame(
+            columns=["标准产品名称", "百补商家实收", "日常商家实收", "百补有效订单数", "日常有效订单数"]
+        )
+    else:
+        revenue_pivot = (
+            baibu_metrics.pivot_table(
+                index="标准产品名称",
+                columns="是否百补",
+                values="商家实收",
+                aggfunc="sum",
+                fill_value=0.0,
+            )
+            .reset_index()
+        )
+        order_pivot = (
+            baibu_metrics.pivot_table(
+                index="标准产品名称",
+                columns="是否百补",
+                values="有效订单数",
+                aggfunc="sum",
+                fill_value=0.0,
+            )
+            .reset_index()
+        )
+
+        def _rename_bb_cols(df: pd.DataFrame, suffix: str) -> pd.DataFrame:
+            rename_map = {}
+            for col in df.columns:
+                if col == "标准产品名称":
+                    continue
+                col_str = str(col).strip()
+                if col_str in ["是", "百补", "1", "True", "true"]:
+                    rename_map[col] = f"百补{suffix}"
+                else:
+                    rename_map[col] = f"日常{suffix}"
+            return df.rename(columns=rename_map)
+
+        revenue_pivot = _rename_bb_cols(revenue_pivot, "商家实收")
+        order_pivot = _rename_bb_cols(order_pivot, "有效订单数")
+
+        baibu_pivot = revenue_pivot.merge(order_pivot, on="标准产品名称", how="outer")
+
     promo_by_product_name = _build_product_promo(valid_orders, promo_by_product)
 
     out = counts.merge(metrics, on="标准产品名称", how="left")
     out = out.merge(promo_by_product_name, on="标准产品名称", how="left")
+    out = out.merge(baibu_pivot, on="标准产品名称", how="left")
     out = out.rename(columns={"实际成交花费(元)": "链接推广费合计"})
 
     for col in [
@@ -303,15 +359,33 @@ def _analyze_products(orders: pd.DataFrame, promo_by_product: pd.DataFrame) -> p
         "平台扣点",
         "订单侧估算毛利",
         "链接推广费合计",
+        "百补商家实收",
+        "日常商家实收",
+        "百补有效订单数",
+        "日常有效订单数",
     ]:
+        if col not in out.columns:
+            out[col] = 0.0
         out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0.0)
 
     out["扣推广后贡献毛利"] = out["订单侧估算毛利"] - out["链接推广费合计"]
     out["实际ROI"] = out.apply(lambda r: safe_divide(r["商家实收"], r["链接推广费合计"]), axis=1)
     out["盈亏平衡ROI"] = out.apply(lambda r: safe_divide(r["商家实收"], r["订单侧估算毛利"]), axis=1)
+
+    out["单均商家实收"] = out.apply(lambda r: safe_divide(r["商家实收"], r["有效订单数"]), axis=1)
+    out["单均订单侧毛利"] = out.apply(lambda r: safe_divide(r["订单侧估算毛利"], r["有效订单数"]), axis=1)
+    out["订单侧毛利率"] = out.apply(lambda r: safe_divide(r["订单侧估算毛利"], r["商家实收"]), axis=1)
+    out["扣推广后毛利率"] = out.apply(lambda r: safe_divide(r["扣推广后贡献毛利"], r["商家实收"]), axis=1)
+    out["推广费率"] = out.apply(lambda r: safe_divide(r["链接推广费合计"], r["商家实收"]), axis=1)
+    out["百补销售占比"] = out.apply(lambda r: safe_divide(r["百补商家实收"], r["商家实收"]), axis=1)
+    out["日常销售占比"] = out.apply(lambda r: safe_divide(r["日常商家实收"], r["商家实收"]), axis=1)
+
     out["产品层级标签"] = out.apply(_product_tier, axis=1)
 
-    return out.sort_values(["产品层级标签", "订单侧估算毛利"], ascending=[True, False])
+    return out.sort_values(
+        ["产品层级标签", "商家实收", "扣推广后贡献毛利"],
+        ascending=[True, False, False],
+    )
 
 
 def _spec_positioning(row: pd.Series) -> str:
@@ -511,12 +585,22 @@ def _analyze_exceptions(
     link_map_for_dup = link_map.copy()
     link_map_for_dup["商品ID"] = link_map_for_dup["商品ID"].fillna("").astype(str).str.strip()
     link_map_for_dup["销售规格ID"] = link_map_for_dup["销售规格ID"].fillna("").astype(str).str.strip()
+
+    if "商品规格" not in link_map_for_dup.columns:
+        link_map_for_dup["商品规格"] = ""
+
+    link_map_for_dup["商品规格"] = (
+        link_map_for_dup["商品规格"].fillna("").astype(str).str.strip()
+    )
+
     link_map_for_dup = link_map_for_dup[
-        (link_map_for_dup["商品ID"] != "") & (link_map_for_dup["销售规格ID"] != "")
+        (link_map_for_dup["商品ID"] != "")
+        & (link_map_for_dup["商品规格"] != "")
+        & (link_map_for_dup["销售规格ID"] != "")
     ].copy()
 
     duplicate_mapping = (
-        link_map_for_dup.groupby(["商品ID", "销售规格ID"], dropna=False)
+        link_map_for_dup.groupby(["商品ID", "商品规格", "销售规格ID"], dropna=False)
         .size()
         .reset_index(name="重复数")
         .query("重复数 > 1")
@@ -558,12 +642,8 @@ def _analyze_exceptions(
         promo_attach_issues["挂接异常原因"] = promo_attach_issues["商品ID"].apply(_attach_reason)
         promo_attach_issues = promo_attach_issues[promo_attach_issues["挂接异常原因"] != ""]
 
-    diff_price_items = orders[orders["订单分类"] == "非经营剔除"][
-        ["订单号", "商品id", "商品"]
-    ]
-    pending_orders = orders[orders["订单分类"] == "待确认"][
-        ["订单号", "商品id", "售后状态", "商品"]
-    ]
+    diff_price_items = orders[orders["订单分类"] == "非经营剔除"][["订单号", "商品id", "商品"]]
+    pending_orders = orders[orders["订单分类"] == "待确认"][["订单号", "商品id", "售后状态", "商品"]]
 
     return {
         "未映射规格": unmapped_specs,
