@@ -61,7 +61,4 @@ def render(overview: dict) -> None:
             st.line_chart(chart_df[["客户实付"]], use_container_width=True)
 
     st.markdown("#### 每日趋势明细")
-    st.dataframe(
-        daily_trend,
-        use_container_width=True,
-    )
+    st.dataframe(daily_trend, use_container_width=True)
