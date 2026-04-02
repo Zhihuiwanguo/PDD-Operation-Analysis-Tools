@@ -80,12 +80,12 @@ def _build_global_filters(orders_df: pd.DataFrame) -> dict:
     st.sidebar.header("全局筛选器")
 
     date_ser = pd.to_datetime(
-        orders_df.get("订单成交时间", "").replace({"\\t": ""}),
+        orders_df.get("订单成交时间", "").replace({"\t": ""}),
         errors="coerce",
     )
     if "支付时间" in orders_df.columns:
         pay_ser = pd.to_datetime(
-            orders_df.get("支付时间", "").replace({"\\t": ""}),
+            orders_df.get("支付时间", "").replace({"\t": ""}),
             errors="coerce",
         )
         date_ser = date_ser.fillna(pay_ser)
