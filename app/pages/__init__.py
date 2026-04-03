@@ -1,4 +1,14 @@
-from . import baibu_vs_normal, business_alerts, exceptions, links, overview, products, promotion, specs
+from . import (
+    baibu_vs_normal,
+    business_alerts,
+    creative_material,
+    exceptions,
+    links,
+    overview,
+    products,
+    promotion,
+    specs,
+)
 
 __all__ = [
     "overview",
@@ -7,6 +17,7 @@ __all__ = [
     "specs",
     "baibu_vs_normal",
     "promotion",
+    "creative_material",
     "business_alerts",
     "exceptions",
 ]
