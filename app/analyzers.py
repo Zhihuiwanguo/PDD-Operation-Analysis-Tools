@@ -1,4 +1,4 @@
-"""分析层：总览、链接、产品、规格、推广与异常。"""
+"""分析层：总览、链接、产品、规格、推广、素材与异常。"""
 
 from __future__ import annotations
 
@@ -37,6 +37,9 @@ def build_analysis_context(
             promo_by_product["商品ID"].astype(str).isin(order_goods)
         ]
 
+    creative_material_df = tables.get("creative_material", pd.DataFrame())
+    creative_material_analysis = _analyze_creative_material(creative_material_df, promo_df, filters)
+
     cashflow_df = _apply_cashflow_filters(tables["cashflow"], filters)
     cash_spend = calc_store_cash_spend(cashflow_df)
 
@@ -56,6 +59,7 @@ def build_analysis_context(
         "spec_summary": spec_summary,
         "baibu_vs_normal": baibu_vs_normal,
         "promotion_analysis": promotion_analysis,
+        "creative_material_analysis": creative_material_analysis,
         "business_alerts": business_alerts,
         "overview": overview,
         "exceptions": exceptions,
@@ -704,10 +708,12 @@ def _prepare_promotion_base(promo_df: pd.DataFrame) -> pd.DataFrame:
     imp_col = _pick_first_existing(out, ["曝光量", "曝光", "展现量"])
     clk_col = _pick_first_existing(out, ["点击量", "点击"])
     ord_col = _pick_first_existing(out, ["成交订单数", "订单数", "成交笔数"])
+    net_amt_col = _pick_first_existing(out, ["净交易额(元)", "净交易额"])
 
     out["曝光"] = _safe_numeric(out[imp_col]) if imp_col else 0.0
     out["点击"] = _safe_numeric(out[clk_col]) if clk_col else 0.0
     out["成交订单数"] = _safe_numeric(out[ord_col]) if ord_col else 0.0
+    out["净交易额"] = _safe_numeric(out[net_amt_col]) if net_amt_col else 0.0
 
     out["CTR"] = out.apply(lambda r: safe_divide(r["点击"], r["曝光"]), axis=1)
     out["转化率"] = out.apply(lambda r: safe_divide(r["成交订单数"], r["点击"]), axis=1)
@@ -719,6 +725,307 @@ def _prepare_promotion_base(promo_df: pd.DataFrame) -> pd.DataFrame:
         out["链接标题"] = out[title_col].fillna("").astype(str)
 
     return out
+
+
+def _prepare_creative_material_base(material_df: pd.DataFrame) -> pd.DataFrame:
+    if material_df is None or material_df.empty:
+        return pd.DataFrame()
+
+    out = material_df.copy()
+
+    text_cols = [
+        "店铺名称",
+        "商品ID",
+        "链接标题",
+        "素材编号",
+        "素材名称",
+        "素材类型大类",
+        "素材类型小类",
+        "图片类型",
+        "审核状态",
+        "是否启用",
+        "数据口径",
+        "统计日期文本",
+        "备注",
+    ]
+    for col in text_cols:
+        if col not in out.columns:
+            out[col] = ""
+        out[col] = out[col].fillna("").astype(str).str.strip()
+
+    if "开始日期" not in out.columns:
+        out["开始日期"] = pd.NaT
+    else:
+        out["开始日期"] = pd.to_datetime(out["开始日期"], errors="coerce")
+
+    if "结束日期" not in out.columns:
+        out["结束日期"] = pd.NaT
+    else:
+        out["结束日期"] = pd.to_datetime(out["结束日期"], errors="coerce")
+
+    numeric_cols = [
+        "统计天数",
+        "交易额(元)",
+        "成交笔数",
+        "每笔成交金额(元)",
+        "曝光量",
+        "点击量",
+        "点击率",
+        "净成交笔数",
+        "每笔净成交金额(元)",
+        "净交易额占比",
+        "净成交笔数占比",
+        "净交易额(元)",
+        "点击转化率",
+    ]
+    for col in numeric_cols:
+        if col not in out.columns:
+            out[col] = 0.0
+        out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0.0)
+
+    if "点击率" not in out.columns or (out["点击率"] == 0).all():
+        out["点击率"] = out.apply(lambda r: safe_divide(r["点击量"], r["曝光量"]), axis=1)
+
+    if "点击转化率" not in out.columns or (out["点击转化率"] == 0).all():
+        out["点击转化率"] = out.apply(lambda r: safe_divide(r["成交笔数"], r["点击量"]), axis=1)
+
+    return out
+
+
+def _apply_creative_material_filters(material_df: pd.DataFrame, filters: dict | None) -> pd.DataFrame:
+    if material_df is None or material_df.empty:
+        return pd.DataFrame()
+
+    if not filters:
+        return material_df
+
+    out = material_df.copy()
+
+    date_range = filters.get("date_range")
+    if date_range and len(date_range) == 2 and all(date_range):
+        start = pd.to_datetime(date_range[0])
+        end = pd.to_datetime(date_range[1])
+        out = out[
+            (out["开始日期"] <= end)
+            & (out["结束日期"] >= start)
+        ]
+
+    if filters.get("stores") and "店铺名称" in out.columns:
+        out = out[out["店铺名称"].astype(str).isin(filters["stores"])]
+
+    if filters.get("goods_ids") and "商品ID" in out.columns:
+        out = out[out["商品ID"].astype(str).isin(list(map(str, filters["goods_ids"])))]
+
+    return out
+
+
+def _build_goods_promo_rollup(material_df: pd.DataFrame, promo_df: pd.DataFrame) -> pd.DataFrame:
+    if material_df.empty:
+        return pd.DataFrame()
+
+    promo_base = _prepare_promotion_base(promo_df)
+    promo_base["商品ID"] = promo_base["商品ID"].fillna("").astype(str).str.strip()
+
+    group_keys = [
+        "店铺名称",
+        "商品ID",
+        "链接标题",
+        "数据口径",
+        "统计日期文本",
+        "开始日期",
+        "结束日期",
+        "统计天数",
+    ]
+
+    periods = material_df[group_keys].drop_duplicates().copy()
+    results: list[dict] = []
+
+    for _, row in periods.iterrows():
+        goods_id = str(row["商品ID"]).strip()
+        start = row["开始日期"]
+        end = row["结束日期"]
+
+        current = promo_base[
+            (promo_base["商品ID"] == goods_id)
+            & (promo_base["日期"] >= start)
+            & (promo_base["日期"] <= end)
+        ].copy()
+
+        result = row.to_dict()
+        result["商品ID汇总实际成交花费(元)"] = float(current["实际成交花费"].sum()) if len(current) else 0.0
+        result["商品ID汇总结算金额(元)"] = float(current["结算金额"].sum()) if len(current) else 0.0
+        result["商品ID汇总曝光量"] = float(current["曝光"].sum()) if len(current) else 0.0
+        result["商品ID汇总点击量"] = float(current["点击"].sum()) if len(current) else 0.0
+        result["商品ID汇总成交笔数"] = float(current["成交订单数"].sum()) if len(current) else 0.0
+        result["商品ID汇总净交易额(元)"] = float(current["净交易额"].sum()) if len(current) else 0.0
+        result["商品ID汇总结算投产比"] = safe_divide(
+            result["商品ID汇总结算金额(元)"],
+            result["商品ID汇总实际成交花费(元)"],
+        )
+        result["素材数量"] = int(
+            material_df[
+                (material_df["商品ID"].astype(str) == goods_id)
+                & (material_df["开始日期"] == start)
+                & (material_df["结束日期"] == end)
+            ]["素材编号"].nunique()
+        )
+        results.append(result)
+
+    return pd.DataFrame(results)
+
+
+def _allocate_creative_estimated_spend(material_df: pd.DataFrame, goods_rollup_df: pd.DataFrame) -> pd.DataFrame:
+    if material_df.empty:
+        return pd.DataFrame()
+
+    merge_keys = [
+        "店铺名称",
+        "商品ID",
+        "链接标题",
+        "数据口径",
+        "统计日期文本",
+        "开始日期",
+        "结束日期",
+        "统计天数",
+    ]
+
+    out = material_df.merge(goods_rollup_df, on=merge_keys, how="left")
+
+    out["商品ID汇总实际成交花费(元)"] = pd.to_numeric(
+        out.get("商品ID汇总实际成交花费(元)", 0), errors="coerce"
+    ).fillna(0.0)
+
+    click_totals = (
+        out.groupby(merge_keys, dropna=False)["点击量"]
+        .sum()
+        .reset_index(name="素材组总点击量")
+    )
+    out = out.merge(click_totals, on=merge_keys, how="left")
+    out["素材组总点击量"] = pd.to_numeric(out["素材组总点击量"], errors="coerce").fillna(0.0)
+
+    out["估算花费(元)"] = out.apply(
+        lambda r: r["商品ID汇总实际成交花费(元)"] * safe_divide(r["点击量"], r["素材组总点击量"]),
+        axis=1,
+    )
+    out["估算ROI"] = out.apply(
+        lambda r: safe_divide(r["净交易额(元)"], r["估算花费(元)"]),
+        axis=1,
+    )
+    return out
+
+
+def _build_creative_type_summary(material_detail: pd.DataFrame) -> pd.DataFrame:
+    if material_detail.empty:
+        return pd.DataFrame()
+
+    group_cols = ["商品ID", "素材类型大类", "素材类型小类"]
+    out = (
+        material_detail.groupby(group_cols, dropna=False)
+        .agg(
+            素材数量=("素材编号", "nunique"),
+            曝光量=("曝光量", "sum"),
+            点击量=("点击量", "sum"),
+            成交笔数=("成交笔数", "sum"),
+            净交易额=("净交易额(元)", "sum"),
+            估算花费=("估算花费(元)", "sum"),
+        )
+        .reset_index()
+    )
+    out["平均点击率"] = out.apply(lambda r: safe_divide(r["点击量"], r["曝光量"]), axis=1)
+    out["平均点击转化率"] = out.apply(lambda r: safe_divide(r["成交笔数"], r["点击量"]), axis=1)
+    out["估算ROI"] = out.apply(lambda r: safe_divide(r["净交易额"], r["估算花费"]), axis=1)
+    out = out.rename(columns={"净交易额": "净交易额(元)", "估算花费": "估算花费(元)"})
+    return out.sort_values(["商品ID", "净交易额(元)"], ascending=[True, False])
+
+
+def _build_creative_anomalies(material_detail: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    if material_detail.empty:
+        return {
+            "高曝光低点击素材": pd.DataFrame(),
+            "高点击低转化素材": pd.DataFrame(),
+            "高点击低净交易额素材": pd.DataFrame(),
+            "高点击低估算ROI素材": pd.DataFrame(),
+            "高潜素材": pd.DataFrame(),
+        }
+
+    records = []
+    for _, grp in material_detail.groupby(["店铺名称", "商品ID", "统计日期文本"], dropna=False):
+        g = grp.copy()
+
+        imp_med = g["曝光量"].median() if len(g) else 0
+        clk_med = g["点击量"].median() if len(g) else 0
+        ctr_med = g["点击率"].median() if len(g) else 0
+        cv_med = g["点击转化率"].median() if len(g) else 0
+        net_med = g["净交易额(元)"].median() if len(g) else 0
+        roi_med = g["估算ROI"].median() if len(g) else 0
+
+        g["__高曝光低点击"] = (g["曝光量"] >= imp_med) & (g["点击率"] < ctr_med)
+        g["__高点击低转化"] = (g["点击量"] >= clk_med) & (g["点击转化率"] < cv_med)
+        g["__高点击低净交易额"] = (g["点击量"] >= clk_med) & (g["净交易额(元)"] < net_med)
+        g["__高点击低估算ROI"] = (g["点击量"] >= clk_med) & (g["估算ROI"] < roi_med)
+        g["__高潜素材"] = (g["点击率"] >= ctr_med) & (g["点击转化率"] >= cv_med) & (g["估算ROI"] >= roi_med)
+        records.append(g)
+
+    merged = pd.concat(records, ignore_index=True) if records else material_detail.copy()
+
+    return {
+        "高曝光低点击素材": merged[merged["__高曝光低点击"]].drop(columns=[c for c in merged.columns if c.startswith("__")], errors="ignore"),
+        "高点击低转化素材": merged[merged["__高点击低转化"]].drop(columns=[c for c in merged.columns if c.startswith("__")], errors="ignore"),
+        "高点击低净交易额素材": merged[merged["__高点击低净交易额"]].drop(columns=[c for c in merged.columns if c.startswith("__")], errors="ignore"),
+        "高点击低估算ROI素材": merged[merged["__高点击低估算ROI"]].drop(columns=[c for c in merged.columns if c.startswith("__")], errors="ignore"),
+        "高潜素材": merged[merged["__高潜素材"]].drop(columns=[c for c in merged.columns if c.startswith("__")], errors="ignore"),
+    }
+
+
+def _analyze_creative_material(
+    creative_material_df: pd.DataFrame,
+    promo_df: pd.DataFrame,
+    filters: dict | None = None,
+) -> dict[str, pd.DataFrame]:
+    if creative_material_df is None or creative_material_df.empty:
+        empty = pd.DataFrame()
+        return {
+            "goods_rollup": empty,
+            "material_detail": empty,
+            "type_summary": empty,
+            "anomalies": {
+                "高曝光低点击素材": empty,
+                "高点击低转化素材": empty,
+                "高点击低净交易额素材": empty,
+                "高点击低估算ROI素材": empty,
+                "高潜素材": empty,
+            },
+        }
+
+    material_base = _prepare_creative_material_base(creative_material_df)
+    material_base = _apply_creative_material_filters(material_base, filters)
+
+    if material_base.empty:
+        empty = pd.DataFrame()
+        return {
+            "goods_rollup": empty,
+            "material_detail": empty,
+            "type_summary": empty,
+            "anomalies": {
+                "高曝光低点击素材": empty,
+                "高点击低转化素材": empty,
+                "高点击低净交易额素材": empty,
+                "高点击低估算ROI素材": empty,
+                "高潜素材": empty,
+            },
+        }
+
+    goods_rollup = _build_goods_promo_rollup(material_base, promo_df)
+    material_detail = _allocate_creative_estimated_spend(material_base, goods_rollup)
+    type_summary = _build_creative_type_summary(material_detail)
+    anomalies = _build_creative_anomalies(material_detail)
+
+    return {
+        "goods_rollup": goods_rollup.sort_values(["商品ID", "开始日期"], ascending=[True, True]),
+        "material_detail": material_detail.sort_values(["商品ID", "开始日期", "素材编号"], ascending=[True, True, True]),
+        "type_summary": type_summary,
+        "anomalies": anomalies,
+    }
 
 
 def _analyze_promotion(promo_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
@@ -797,7 +1104,7 @@ def _analyze_promotion(promo_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
 
     detail_sorted = detail.sort_values(["商品ID", "日期"])
     roi_drop_rows = []
-    for goods_id, grp in detail_sorted.groupby("商品ID"):
+    for _, grp in detail_sorted.groupby("商品ID"):
         g = grp.dropna(subset=["日期"]).tail(3)
         if len(g) == 3:
             vals = g["结算投产比"].tolist()
@@ -806,7 +1113,7 @@ def _analyze_promotion(promo_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
     roi_continuous_down = pd.DataFrame(roi_drop_rows)
 
     scale_bad_rows = []
-    for goods_id, grp in detail_sorted.groupby("商品ID"):
+    for _, grp in detail_sorted.groupby("商品ID"):
         g = grp.dropna(subset=["日期"]).sort_values("日期")
         if len(g) >= 3:
             last = g.iloc[-1]
