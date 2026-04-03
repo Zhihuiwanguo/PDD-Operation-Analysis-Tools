@@ -77,12 +77,12 @@ def _apply_order_filters(orders: pd.DataFrame, filters: dict | None) -> pd.DataF
     if "订单成交时间" not in out.columns:
         out["订单成交时间"] = ""
     out["__筛选日期"] = pd.to_datetime(
-        out["订单成交时间"].replace({"\t": ""}),
+        out["订单成交时间"].replace({"\\t": ""}),
         errors="coerce",
     )
 
     if "支付时间" in out.columns:
-        pay_time = pd.to_datetime(out["支付时间"].replace({"\t": ""}), errors="coerce")
+        pay_time = pd.to_datetime(out["支付时间"].replace({"\\t": ""}), errors="coerce")
         out["__筛选日期"] = out["__筛选日期"].fillna(pay_time)
 
     date_range = filters.get("date_range")
@@ -156,12 +156,12 @@ def _build_overview_daily_trend(valid_orders: pd.DataFrame) -> pd.DataFrame:
         out["订单成交时间"] = ""
 
     out["日期"] = pd.to_datetime(
-        out["订单成交时间"].replace({"\t": ""}),
+        out["订单成交时间"].replace({"\\t": ""}),
         errors="coerce",
     )
 
     if "支付时间" in out.columns:
-        pay_time = pd.to_datetime(out["支付时间"].replace({"\t": ""}), errors="coerce")
+        pay_time = pd.to_datetime(out["支付时间"].replace({"\\t": ""}), errors="coerce")
         out["日期"] = out["日期"].fillna(pay_time)
 
     out["日期"] = out["日期"].dt.normalize()
@@ -703,14 +703,15 @@ def _normalize_goods_id_value(value) -> str:
 def _normalize_goods_id_series(series: pd.Series) -> pd.Series:
     return series.apply(_normalize_goods_id_value)
 
+
 def _prepare_promotion_base(promo_df: pd.DataFrame) -> pd.DataFrame:
     out = promo_df.copy()
 
     if "商品ID" not in out.columns:
         out["商品ID"] = ""
-    out["商品ID"] = out["商品ID"].fillna("").astype(str).str.strip()
+    out["商品ID"] = _normalize_goods_id_series(out["商品ID"])
 
-    date_col = _pick_first_existing(out, ["日期", "统计日期", "时间"])
+    date_col = _pick_first_existing(out, ["日期", "统计日期", "统计日期文本", "时间"])
     if date_col is None:
         out["日期"] = pd.NaT
     else:
@@ -782,6 +783,13 @@ def _prepare_creative_material_base(material_df: pd.DataFrame) -> pd.DataFrame:
             out[col] = ""
         out[col] = out[col].fillna("").astype(str).str.strip()
 
+    out["商品ID"] = _normalize_goods_id_series(out["商品ID"])
+
+    if "统计日期" not in out.columns:
+        out["统计日期"] = pd.NaT
+    else:
+        out["统计日期"] = pd.to_datetime(out["统计日期"], errors="coerce")
+
     if "开始日期" not in out.columns:
         out["开始日期"] = pd.NaT
     else:
@@ -791,6 +799,17 @@ def _prepare_creative_material_base(material_df: pd.DataFrame) -> pd.DataFrame:
         out["结束日期"] = pd.NaT
     else:
         out["结束日期"] = pd.to_datetime(out["结束日期"], errors="coerce")
+
+    out["开始日期"] = out["开始日期"].fillna(out["统计日期"])
+    out["结束日期"] = out["结束日期"].fillna(out["统计日期"])
+    out["结束日期"] = out["结束日期"].fillna(out["开始日期"])
+
+    out["开始日期"] = pd.to_datetime(out["开始日期"], errors="coerce").dt.normalize()
+    out["结束日期"] = (
+        pd.to_datetime(out["结束日期"], errors="coerce").dt.normalize()
+        + pd.Timedelta(days=1)
+        - pd.Timedelta(seconds=1)
+    )
 
     numeric_cols = [
         "统计天数",
@@ -837,31 +856,6 @@ def _apply_creative_material_filters(material_df: pd.DataFrame, filters: dict | 
 
     out = material_df.copy()
 
-    # 第一版仅按商品ID筛选，避免被订单侧全局筛选误伤
-    if filters.get("goods_ids") and "商品ID" in out.columns:
-        out = out[out["商品ID"].astype(str).isin(list(map(str, filters["goods_ids"])))]
-
-    return out
-    if material_df is None or material_df.empty:
-        return pd.DataFrame()
-
-    if not filters:
-        return material_df
-
-    out = material_df.copy()
-
-    date_range = filters.get("date_range")
-    if date_range and len(date_range) == 2 and all(date_range):
-        start = pd.to_datetime(date_range[0])
-        end = pd.to_datetime(date_range[1])
-        out = out[
-            (out["开始日期"] <= end)
-            & (out["结束日期"] >= start)
-        ]
-
-    if filters.get("stores") and "店铺名称" in out.columns:
-        out = out[out["店铺名称"].astype(str).isin(filters["stores"])]
-
     if filters.get("goods_ids") and "商品ID" in out.columns:
         out = out[out["商品ID"].astype(str).isin(list(map(str, filters["goods_ids"])))]
 
@@ -873,7 +867,8 @@ def _build_goods_promo_rollup(material_df: pd.DataFrame, promo_df: pd.DataFrame)
         return pd.DataFrame()
 
     promo_base = _prepare_promotion_base(promo_df)
-    promo_base["商品ID"] = promo_base["商品ID"].fillna("").astype(str).str.strip()
+    promo_base["商品ID"] = _normalize_goods_id_series(promo_base["商品ID"])
+    promo_base["日期"] = pd.to_datetime(promo_base["日期"], errors="coerce")
 
     group_keys = [
         "店铺名称",
@@ -887,7 +882,9 @@ def _build_goods_promo_rollup(material_df: pd.DataFrame, promo_df: pd.DataFrame)
     ]
 
     periods = material_df[group_keys].drop_duplicates().copy()
-    results: list[dict] = []
+    periods["商品ID"] = _normalize_goods_id_series(periods["商品ID"])
+
+    results = []
 
     for _, row in periods.iterrows():
         goods_id = str(row["商品ID"]).strip()
@@ -911,13 +908,15 @@ def _build_goods_promo_rollup(material_df: pd.DataFrame, promo_df: pd.DataFrame)
             result["商品ID汇总结算金额(元)"],
             result["商品ID汇总实际成交花费(元)"],
         )
+
         result["素材数量"] = int(
             material_df[
-                (material_df["商品ID"].astype(str) == goods_id)
+                (material_df["商品ID"].astype(str).map(_normalize_goods_id_value) == goods_id)
                 & (material_df["开始日期"] == start)
                 & (material_df["结束日期"] == end)
             ]["素材编号"].nunique()
         )
+
         results.append(result)
 
     return pd.DataFrame(results)
