@@ -793,6 +793,26 @@ def _prepare_creative_material_base(material_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _apply_creative_material_filters(material_df: pd.DataFrame, filters: dict | None) -> pd.DataFrame:
+    """
+    推广素材分析第一版先不跟随订单侧全局日期 / 店铺筛选，
+    避免因为订单表口径不完整（如缺店铺名称、日期范围不同）把素材数据误筛空。
+
+    当前仅保留商品ID筛选。
+    后续如需要，再给素材分析模块单独做自己的筛选器。
+    """
+    if material_df is None or material_df.empty:
+        return pd.DataFrame()
+
+    if not filters:
+        return material_df
+
+    out = material_df.copy()
+
+    # 第一版仅按商品ID筛选，避免被订单侧全局筛选误伤
+    if filters.get("goods_ids") and "商品ID" in out.columns:
+        out = out[out["商品ID"].astype(str).isin(list(map(str, filters["goods_ids"])))]
+
+    return out
     if material_df is None or material_df.empty:
         return pd.DataFrame()
 
