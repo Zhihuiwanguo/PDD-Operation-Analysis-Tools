@@ -674,6 +674,35 @@ def _safe_numeric(series: pd.Series) -> pd.Series:
     return pd.to_numeric(series, errors="coerce").fillna(0.0)
 
 
+def _normalize_goods_id_value(value) -> str:
+    """
+    统一商品ID格式，解决 Excel 导入后出现 1234567890.0 导致挂接失败的问题。
+    """
+    if pd.isna(value):
+        return ""
+
+    s = str(value).strip()
+    if s in {"", "nan", "None", "null", "-"}:
+        return ""
+
+    if s.endswith(".0"):
+        prefix = s[:-2]
+        if prefix.isdigit():
+            return prefix
+
+    try:
+        f = float(s)
+        if pd.notna(f) and f.is_integer():
+            return str(int(f))
+    except Exception:
+        pass
+
+    return s
+
+
+def _normalize_goods_id_series(series: pd.Series) -> pd.Series:
+    return series.apply(_normalize_goods_id_value)
+
 def _prepare_promotion_base(promo_df: pd.DataFrame) -> pd.DataFrame:
     out = promo_df.copy()
 
