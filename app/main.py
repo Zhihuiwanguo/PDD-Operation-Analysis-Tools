@@ -70,6 +70,8 @@ def _render_uploads() -> dict:
                 st.success("字段校验通过")
             else:
                 st.error(f"缺失关键字段: {', '.join(r.missing_columns)}")
+            if r.extra_message:
+                st.warning(r.extra_message)
 
     if not all(r.ok for r in checks):
         st.stop()
@@ -141,53 +143,68 @@ def main() -> None:
     st.caption(f"当前日期筛选字段：{ctx['date_field_used']}")
 
     tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs(
-    [
-        "经营总览",
-        "链接分析",
-        "产品分析",
-        "规格分析",
-        "百补 vs 日常",
-        "推广分析",
-        "推广素材分析",
-        "经营异常",
-        "异常清单",
-    ]
-)
-
-   with tab1:
-    overview.render(ctx["overview"])
-with tab2:
-    links.render(ctx["link_summary"])
-with tab3:
-    products.render(ctx["product_summary"])
-with tab4:
-    specs.render(ctx["spec_summary"])
-with tab5:
-    baibu_vs_normal.render(ctx["baibu_vs_normal"])
-with tab6:
-    promotion.render(ctx["promotion_analysis"])
-with tab7:
-    creative_material.render(ctx["creative_material_analysis"])
-with tab8:
-    business_alerts.render(ctx["business_alerts"])
-with tab9:
-    exceptions.render(ctx["exceptions"])
-    excel_blob = to_excel_bytes(
-        {
-            "经营总览": pd.DataFrame([ctx["overview"]["metrics"]]),
-            "经营总览-每日趋势": ctx["overview"]["daily_trend"],
-            "链接分析": ctx["link_summary"],
-            "产品分析": ctx["product_summary"],
-            "规格分析": ctx["spec_summary"],
-            "百补vs日常": ctx["baibu_vs_normal"],
-            "推广分析-每日": ctx["promotion_analysis"]["daily"],
-            "推广分析-商品汇总": ctx["promotion_analysis"]["goods"],
-            "推广分析-单品明细": ctx["promotion_analysis"]["detail"],
-            **{f"推广异常-{k}": v for k, v in ctx["promotion_analysis"]["anomalies"].items()},
-            **{f"经营异常-{k}": v for k, v in ctx["business_alerts"].items()},
-            **{f"异常-{k}": v for k, v in ctx["exceptions"].items()},
-        }
+        [
+            "经营总览",
+            "链接分析",
+            "产品分析",
+            "规格分析",
+            "百补 vs 日常",
+            "推广分析",
+            "推广素材分析",
+            "经营异常",
+            "异常清单",
+        ]
     )
+
+    with tab1:
+        overview.render(ctx["overview"])
+    with tab2:
+        links.render(ctx["link_summary"])
+    with tab3:
+        products.render(ctx["product_summary"])
+    with tab4:
+        specs.render(ctx["spec_summary"])
+    with tab5:
+        baibu_vs_normal.render(ctx["baibu_vs_normal"])
+    with tab6:
+        promotion.render(ctx["promotion_analysis"])
+    with tab7:
+        creative_material.render(ctx["creative_material_analysis"])
+    with tab8:
+        business_alerts.render(ctx["business_alerts"])
+    with tab9:
+        exceptions.render(ctx["exceptions"])
+
+    export_payload = {
+        "经营总览": pd.DataFrame([ctx["overview"]["metrics"]]),
+        "经营总览-每日趋势": ctx["overview"]["daily_trend"],
+        "链接分析": ctx["link_summary"],
+        "产品分析": ctx["product_summary"],
+        "规格分析": ctx["spec_summary"],
+        "百补vs日常": ctx["baibu_vs_normal"],
+        "推广分析-每日": ctx["promotion_analysis"]["daily"],
+        "推广分析-商品汇总": ctx["promotion_analysis"]["goods"],
+        "推广分析-单品明细": ctx["promotion_analysis"]["detail"],
+        **{f"推广异常-{k}": v for k, v in ctx["promotion_analysis"]["anomalies"].items()},
+        **{f"经营异常-{k}": v for k, v in ctx["business_alerts"].items()},
+        **{f"异常-{k}": v for k, v in ctx["exceptions"].items()},
+    }
+
+    creative_ctx = ctx.get("creative_material_analysis", {})
+    if creative_ctx:
+        export_payload.update(
+            {
+                "推广素材分析-商品ID汇总": creative_ctx.get("goods_rollup", pd.DataFrame()),
+                "推广素材分析-素材明细": creative_ctx.get("material_detail", pd.DataFrame()),
+                "推广素材分析-素材类型汇总": creative_ctx.get("type_summary", pd.DataFrame()),
+                **{
+                    f"推广素材异常-{k}": v
+                    for k, v in creative_ctx.get("anomalies", {}).items()
+                },
+            }
+        )
+
+    excel_blob = to_excel_bytes(export_payload)
 
     st.download_button(
         "导出结果 Excel（当前筛选结果）",
