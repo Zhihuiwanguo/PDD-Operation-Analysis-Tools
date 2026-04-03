@@ -19,6 +19,7 @@ def _format_percent_columns(df: pd.DataFrame, columns: list[str]) -> pd.DataFram
 
 def render(creative_analysis: dict):
     st.subheader("推广素材分析")
+    st.caption("说明：本页中的“估算花费(元)”与“估算ROI”为估算口径，不代表后台真实单素材花费或真实单素材ROI。")
 
     goods_rollup = creative_analysis.get("goods_rollup", pd.DataFrame())
     material_detail = creative_analysis.get("material_detail", pd.DataFrame())
