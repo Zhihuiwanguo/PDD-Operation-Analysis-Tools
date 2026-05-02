@@ -3,6 +3,7 @@ from . import (
     business_alerts,
     creative_material,
     exceptions,
+    kpi_assessment,
     links,
     overview,
     products,
@@ -20,4 +21,5 @@ __all__ = [
     "creative_material",
     "business_alerts",
     "exceptions",
+    "kpi_assessment",
 ]

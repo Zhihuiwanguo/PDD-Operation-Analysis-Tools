@@ -64,6 +64,7 @@ def build_analysis_context(
         "overview": overview,
         "exceptions": exceptions,
         "store_cash_spend": cash_spend,
+        "kpi_assessment": {},
         "date_field_used": "订单成交时间(为空回退支付时间)",
     }
 
@@ -209,6 +210,79 @@ def _analyze_overview(orders: pd.DataFrame, cash_spend: float) -> dict:
     return {
         "metrics": metrics,
         "daily_trend": daily_trend,
+    }
+
+
+def compute_kpi_assessment(
+    orders: pd.DataFrame,
+    promo_df: pd.DataFrame,
+    q2_sales_target: float,
+    q2_roi_target: float,
+    personal_score: float,
+) -> dict[str, float | str]:
+    valid_orders = orders[orders["订单分类"] == "有效"].copy()
+    current_sales = float(valid_orders["商家实收金额(元)"].sum())
+    current_profit = float(valid_orders["订单侧估算毛利"].sum())
+    if isinstance(promo_df, pd.DataFrame) and "实际成交花费(元)" in promo_df.columns:
+        spend_series = pd.to_numeric(promo_df["实际成交花费(元)"], errors="coerce").fillna(0.0)
+        current_spend = float(spend_series.sum())
+    else:
+        current_spend = 0.0
+
+    current_roi = safe_divide(current_sales, current_spend)
+    sales_rate = safe_divide(current_sales, q2_sales_target)
+    roi_rate = safe_divide(current_roi, q2_roi_target)
+
+    if current_roi >= q2_roi_target:
+        roi_penalty_rate = roi_rate
+    else:
+        gap = q2_roi_target - current_roi
+        deduct_steps = np.ceil(max(gap, 0.0) / 0.1)
+        roi_penalty_rate = max(0.0, 1.0 - 0.05 * deduct_steps)
+
+    margin_rate = safe_divide(current_profit, current_sales)
+    composite_rate = sales_rate * 0.60 + roi_rate * 0.25 + personal_score * 0.15
+
+    if sales_rate < 0.7:
+        risk_level = "归零风险"
+        max_risk = "销售达成率低于70%，存在奖金归零风险"
+    elif composite_rate < 0.8:
+        risk_level = "高风险"
+        max_risk = "综合达成率不足80%，奖金达成压力较高"
+    elif composite_rate < 1.0:
+        risk_level = "预警"
+        max_risk = "综合达成率未到100%，需持续优化"
+    else:
+        risk_level = "安全"
+        max_risk = "当前达成表现安全"
+
+    if sales_rate < roi_rate:
+        weak_point = "销售额不足"
+    else:
+        weak_point = "ROI不足"
+
+    zero_risk = "是" if sales_rate < 0.7 else "否"
+
+    advice = (
+        f"最大风险：{max_risk}；主要短板：{weak_point}；"
+        f"销售达成率低于70%归零风险：{zero_risk}。"
+        "建议优先动作：1) 聚焦高转化链接提升销售额；2) 控制低效推广费，优化ROI；"
+        "3) 重点优化百补低ROI链接；4) 放大利润规格与高毛利产品投放。"
+    )
+
+    return {
+        "当前销售额": current_sales,
+        "Q2销售目标": float(q2_sales_target),
+        "销售达成率": float(sales_rate),
+        "当前实际ROI": float(current_roi),
+        "Q2 ROI目标": float(q2_roi_target),
+        "ROI达成率": float(roi_rate),
+        "ROI扣分法达成率": float(roi_penalty_rate),
+        "个人指标得分": float(personal_score),
+        "综合达成率": float(composite_rate),
+        "当前毛利率": float(margin_rate),
+        "奖金风险等级": risk_level,
+        "经营建议": advice,
     }
 
 
