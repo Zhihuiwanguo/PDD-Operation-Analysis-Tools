@@ -10,6 +10,7 @@ from app.config import CONFIG
 from app.constants import DATE_CANDIDATE_COLUMNS, NUMERIC_COLUMNS, UPLOAD_SPECS
 from app.data_loader import load_sample_tables, load_table
 from app.exporters import to_excel_bytes
+from app.report_pack import build_ppt_report_pack, to_ppt_report_pack_json
 from app.pages import (
     baibu_vs_normal,
     business_alerts,
@@ -239,6 +240,15 @@ def main() -> None:
         data=excel_blob,
         file_name="艾兰得拼多多经营分析系统_筛选结果.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+    report_pack = build_ppt_report_pack(ctx=ctx, q2_result=q2_result, filters=filters)
+    report_pack_json = to_ppt_report_pack_json(report_pack)
+    st.download_button(
+        "导出 PPT 汇报数据包 JSON",
+        data=report_pack_json,
+        file_name="艾兰得拼多多经营分析报告_数据包.json",
+        mime="application/json",
     )
 
 
