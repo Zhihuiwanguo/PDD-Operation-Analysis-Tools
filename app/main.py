@@ -147,6 +147,7 @@ def main() -> None:
     st.sidebar.subheader("Q2考核参数")
     q2_sales_target = st.sidebar.number_input("Q2销售目标", min_value=0.0, value=0.0, step=1000.0)
     q2_roi_target = st.sidebar.number_input("Q2 ROI目标", min_value=0.1, value=1.9, step=0.1)
+    q2_remaining_days = st.sidebar.number_input("Q2剩余天数", min_value=1, value=30, step=1)
     personal_score_pct = st.sidebar.number_input("个人指标得分(%)", min_value=0.0, max_value=200.0, value=100.0, step=1.0)
     gross_margin_warn_pct = st.sidebar.number_input("毛利率预警线(%)", min_value=-100.0, max_value=100.0, value=0.0, step=0.5)
 
@@ -156,9 +157,14 @@ def main() -> None:
         q2_sales_target=q2_sales_target,
         q2_roi_target=q2_roi_target,
         personal_score=personal_score_pct / 100.0,
+        remaining_days=int(q2_remaining_days),
     )
     if q2_result["当前毛利率"] < gross_margin_warn_pct / 100.0:
-        q2_result["经营建议"] = "当前毛利率低于预警线，建议优先收缩低毛利投放并放大利润规格。\n" + q2_result["经营建议"]
+        q2_result["经营建议"] = (
+            "当前毛利率低于预警线，放量时要优先选择高毛利规格和ROI更接近目标的链接，"
+            "避免为了冲销售额牺牲过多利润。\n"
+            + q2_result["经营建议"]
+        )
 
     tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs(
         [

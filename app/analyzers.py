@@ -220,6 +220,7 @@ def compute_kpi_assessment(
     q2_sales_target: float,
     q2_roi_target: float,
     personal_score: float,
+    remaining_days: int = 30,
 ) -> dict[str, float | str]:
     valid_orders = orders[orders["订单分类"] == "有效"].copy()
     current_sales = float(valid_orders["商家实收金额(元)"].sum())
@@ -247,6 +248,16 @@ def compute_kpi_assessment(
 
     margin_rate = safe_divide(current_profit, current_sales)
     composite_rate = sales_rate * 0.60 + roi_rate * 0.25 + personal_score * 0.15
+    remaining_days = max(int(remaining_days), 1)
+
+    sales_safe_line_70 = float(q2_sales_target) * 0.7
+    gap_to_70_sales = max(sales_safe_line_70 - current_sales, 0.0)
+    gap_to_100_sales = max(float(q2_sales_target) - current_sales, 0.0)
+    gap_to_roi_target = max(float(q2_roi_target) - current_roi, 0.0)
+    sales_rate_gap_to_70 = max(0.7 - sales_rate, 0.0)
+    sales_rate_gap_to_100 = max(1.0 - sales_rate, 0.0)
+    daily_sales_need_for_70 = safe_divide(gap_to_70_sales, remaining_days)
+    daily_sales_need_for_100 = safe_divide(gap_to_100_sales, remaining_days)
 
     if sales_rate < 0.7:
         risk_level = "归零风险"
@@ -274,11 +285,15 @@ def compute_kpi_assessment(
         "建议优先动作：1) 聚焦高转化链接提升销售额；2) 控制低效推广费，优化ROI；"
         "3) 重点优化百补低ROI链接；4) 放大利润规格与高毛利产品投放。"
     )
+    if sales_rate < 0.7:
+        advice += " 当前首要任务不是追求利润最大化，而是先突破70%销售安全线，避免季度奖金归零。"
 
     return {
         "当前销售额": current_sales,
         "Q2销售目标": float(q2_sales_target),
         "销售达成率": float(sales_rate),
+        "当前销售达成率距离70%还差": float(sales_rate_gap_to_70),
+        "当前销售达成率距离100%还差": float(sales_rate_gap_to_100),
         "当前实际ROI": float(current_roi),
         "Q2 ROI目标": float(q2_roi_target),
         "ROI达成率": float(roi_rate),
@@ -286,6 +301,13 @@ def compute_kpi_assessment(
         "个人指标得分": float(personal_score),
         "综合达成率": float(composite_rate),
         "当前毛利率": float(margin_rate),
+        "70%销售安全线": float(sales_safe_line_70),
+        "距离70%安全线还差": float(gap_to_70_sales),
+        "距离100%销售目标还差": float(gap_to_100_sales),
+        "Q2剩余天数": remaining_days,
+        "达到70%安全线每日需完成销售额": float(daily_sales_need_for_70),
+        "达到100%目标每日需完成销售额": float(daily_sales_need_for_100),
+        "距离目标ROI还差": float(gap_to_roi_target),
         "奖金风险等级": risk_level,
         "经营建议": advice,
     }
