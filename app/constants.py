@@ -75,6 +75,14 @@ UPLOAD_SPECS: tuple[UploadSpec, ...] = (
 
 UPLOAD_SPEC_MAP = {spec.key: spec for spec in UPLOAD_SPECS}
 
+PROMOTION_SPEND_COLUMN_ALIASES: tuple[str, ...] = (
+    "成交花费",
+    "成交花费(元)",
+    "实际成交花费(元)",
+    "实际成交花费",
+    "推广费",
+)
+
 DATE_CANDIDATE_COLUMNS: dict[str, tuple[str, ...]] = {
     "orders": ("订单成交时间", "支付时间"),
     "promotion": ("日期",),
