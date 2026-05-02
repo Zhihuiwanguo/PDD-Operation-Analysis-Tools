@@ -1,11 +1,11 @@
-"""拼多多运营分析工具 v1 - Streamlit MVP。"""
+"""艾兰得拼多多经营分析系统 - Streamlit MVP。"""
 
 from __future__ import annotations
 
 import pandas as pd
 import streamlit as st
 
-from app.analyzers import build_analysis_context
+from app.analyzers import build_analysis_context, compute_kpi_assessment
 from app.config import CONFIG
 from app.constants import DATE_CANDIDATE_COLUMNS, NUMERIC_COLUMNS, UPLOAD_SPECS
 from app.data_loader import load_sample_tables, load_table
@@ -14,6 +14,7 @@ from app.pages import (
     baibu_vs_normal,
     business_alerts,
     creative_material,
+    kpi_assessment,
     exceptions,
     links,
     overview,
@@ -24,8 +25,8 @@ from app.pages import (
 from app.utils import to_numeric
 from app.validators import validate_all
 
-st.set_page_config(page_title="拼多多运营分析工具 v1", layout="wide")
-st.title("拼多多运营分析工具 v1")
+st.set_page_config(page_title="艾兰得拼多多经营分析系统", layout="wide")
+st.title("艾兰得拼多多经营分析系统")
 
 
 def _prepare_tables(raw_tables):
@@ -142,7 +143,24 @@ def main() -> None:
     st.success("分析完成。")
     st.caption(f"当前日期筛选字段：{ctx['date_field_used']}")
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs(
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("Q2考核参数")
+    q2_sales_target = st.sidebar.number_input("Q2销售目标", min_value=0.0, value=0.0, step=1000.0)
+    q2_roi_target = st.sidebar.number_input("Q2 ROI目标", min_value=0.1, value=1.9, step=0.1)
+    personal_score_pct = st.sidebar.number_input("个人指标得分(%)", min_value=0.0, max_value=200.0, value=100.0, step=1.0)
+    gross_margin_warn_pct = st.sidebar.number_input("毛利率预警线(%)", min_value=-100.0, max_value=100.0, value=0.0, step=0.5)
+
+    q2_result = compute_kpi_assessment(
+        ctx["orders_enriched"],
+        ctx["promotion_analysis"]["detail"],
+        q2_sales_target=q2_sales_target,
+        q2_roi_target=q2_roi_target,
+        personal_score=personal_score_pct / 100.0,
+    )
+    if q2_result["当前毛利率"] < gross_margin_warn_pct / 100.0:
+        q2_result["经营建议"] = "当前毛利率低于预警线，建议优先收缩低毛利投放并放大利润规格。\n" + q2_result["经营建议"]
+
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs(
         [
             "经营总览",
             "链接分析",
@@ -153,6 +171,7 @@ def main() -> None:
             "推广素材分析",
             "经营异常",
             "异常清单",
+            "Q2考核达成率",
         ]
     )
 
@@ -174,6 +193,8 @@ def main() -> None:
         business_alerts.render(ctx["business_alerts"])
     with tab9:
         exceptions.render(ctx["exceptions"])
+    with tab10:
+        kpi_assessment.render(q2_result)
 
     export_payload = {
         "经营总览": pd.DataFrame([ctx["overview"]["metrics"]]),
@@ -188,6 +209,7 @@ def main() -> None:
         **{f"推广异常-{k}": v for k, v in ctx["promotion_analysis"]["anomalies"].items()},
         **{f"经营异常-{k}": v for k, v in ctx["business_alerts"].items()},
         **{f"异常-{k}": v for k, v in ctx["exceptions"].items()},
+        "Q2考核达成率": pd.DataFrame([q2_result]),
     }
 
     creative_ctx = ctx.get("creative_material_analysis", {})
@@ -209,7 +231,7 @@ def main() -> None:
     st.download_button(
         "导出结果 Excel（当前筛选结果）",
         data=excel_blob,
-        file_name="pdd_运营分析_v1_筛选结果.xlsx",
+        file_name="艾兰得拼多多经营分析系统_筛选结果.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
