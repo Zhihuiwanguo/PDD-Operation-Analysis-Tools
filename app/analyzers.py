@@ -223,7 +223,11 @@ def compute_kpi_assessment(
     valid_orders = orders[orders["订单分类"] == "有效"].copy()
     current_sales = float(valid_orders["商家实收金额(元)"].sum())
     current_profit = float(valid_orders["订单侧估算毛利"].sum())
-    current_spend = float(pd.to_numeric(promo_df.get("实际成交花费(元)", 0.0), errors="coerce").fillna(0.0).sum())
+    if isinstance(promo_df, pd.DataFrame) and "实际成交花费(元)" in promo_df.columns:
+        spend_series = pd.to_numeric(promo_df["实际成交花费(元)"], errors="coerce").fillna(0.0)
+        current_spend = float(spend_series.sum())
+    else:
+        current_spend = 0.0
 
     current_roi = safe_divide(current_sales, current_spend)
     sales_rate = safe_divide(current_sales, q2_sales_target)
