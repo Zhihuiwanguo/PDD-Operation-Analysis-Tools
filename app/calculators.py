@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 from app.config import CONFIG
+from app.constants import PROMOTION_SPEND_COLUMN_ALIASES
 from app.utils import safe_divide
 
 
@@ -242,9 +243,11 @@ def aggregate_promotion_by_product(promotion_df: pd.DataFrame) -> pd.DataFrame:
     out["商品ID"] = out["商品ID"].fillna("").astype(str).str.strip()
     out = out[~out["商品ID"].isin(["", "-", "nan", "None"])].copy()
 
-    if "实际成交花费(元)" not in out.columns:
-        out["实际成交花费(元)"] = 0
-    out["实际成交花费(元)"] = pd.to_numeric(out["实际成交花费(元)"], errors="coerce").fillna(0)
+    spend_col = next((col for col in PROMOTION_SPEND_COLUMN_ALIASES if col in out.columns), None)
+    if spend_col is None:
+        out["实际成交花费(元)"] = 0.0
+    else:
+        out["实际成交花费(元)"] = pd.to_numeric(out[spend_col], errors="coerce").fillna(0.0)
 
     return out.groupby("商品ID", as_index=False)["实际成交花费(元)"].sum()
 

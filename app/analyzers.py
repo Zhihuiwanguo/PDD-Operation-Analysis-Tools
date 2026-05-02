@@ -12,6 +12,7 @@ from app.calculators import (
     prepare_enriched_orders,
 )
 from app.config import CONFIG
+from app.constants import PROMOTION_SPEND_COLUMN_ALIASES
 from app.utils import safe_divide
 
 
@@ -223,9 +224,13 @@ def compute_kpi_assessment(
     valid_orders = orders[orders["订单分类"] == "有效"].copy()
     current_sales = float(valid_orders["商家实收金额(元)"].sum())
     current_profit = float(valid_orders["订单侧估算毛利"].sum())
-    if isinstance(promo_df, pd.DataFrame) and "实际成交花费(元)" in promo_df.columns:
-        spend_series = pd.to_numeric(promo_df["实际成交花费(元)"], errors="coerce").fillna(0.0)
-        current_spend = float(spend_series.sum())
+    if isinstance(promo_df, pd.DataFrame):
+        spend_col = next((col for col in PROMOTION_SPEND_COLUMN_ALIASES if col in promo_df.columns), None)
+        if spend_col is not None:
+            spend_series = pd.to_numeric(promo_df[spend_col], errors="coerce").fillna(0.0)
+            current_spend = float(spend_series.sum())
+        else:
+            current_spend = 0.0
     else:
         current_spend = 0.0
 
@@ -791,7 +796,7 @@ def _prepare_promotion_base(promo_df: pd.DataFrame) -> pd.DataFrame:
     else:
         out["日期"] = pd.to_datetime(out[date_col], errors="coerce")
 
-    spend_col = _pick_first_existing(out, ["实际成交花费", "实际成交花费(元)"])
+    spend_col = _pick_first_existing(out, list(PROMOTION_SPEND_COLUMN_ALIASES))
     if spend_col is None:
         out["实际成交花费"] = 0.0
     else:
