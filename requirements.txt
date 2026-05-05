@@ -6,3 +6,7 @@ plotly>=5.20
 xlsxwriter>=3.2
 xlrd>=2.0
 python-dateutil>=2.9
+
+openai>=1.0.0
+google-generativeai>=0.7.0
+requests>=2.31.0
