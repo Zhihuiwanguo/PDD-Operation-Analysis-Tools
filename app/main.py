@@ -244,6 +244,7 @@ def main() -> None:
         business_alerts.render(ctx["business_alerts"])
     with tab9:
         exceptions.render(ctx["exceptions"])
+        exceptions.render_mapping_coverage(ctx.get("mapping_coverage", pd.DataFrame()))
     with tab10:
         kpi_assessment.render(q2_result)
     with tab11:
@@ -307,6 +308,7 @@ def main() -> None:
         **{f"推广异常-{k}": v for k, v in ctx["promotion_analysis"]["anomalies"].items()},
         **{f"经营异常-{k}": v for k, v in ctx["business_alerts"].items()},
         **{f"异常-{k}": v for k, v in ctx["exceptions"].items()},
+        "商品映射异常": ctx.get("mapping_coverage", pd.DataFrame()),
         "Q2考核达成率": pd.DataFrame([q2_result]),
     }
 
