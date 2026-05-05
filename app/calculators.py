@@ -65,6 +65,11 @@ def classify_orders(df: pd.DataFrame) -> pd.DataFrame:
 def prepare_enriched_orders(
     tables: dict[str, pd.DataFrame],
 ) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
+    required = ["orders", "link_spec_mapping", "sales_spec_mapping", "product_master"]
+    missing = [k for k in required if k not in tables]
+    if missing:
+        raise KeyError(f"缺少必需数据表: {', '.join(missing)}")
+
     orders = classify_orders(tables["orders"]).copy()
 
     if "商品id" not in orders.columns and "商品ID" in orders.columns:
