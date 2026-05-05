@@ -16,6 +16,139 @@ from app.constants import PROMOTION_SPEND_COLUMN_ALIASES
 from app.utils import safe_divide
 
 
+def analyze_mapping_coverage(tables: dict[str, pd.DataFrame]) -> pd.DataFrame:
+    orders = tables.get("orders", pd.DataFrame()).copy()
+    link_map = tables.get("link_spec_mapping", pd.DataFrame()).copy()
+    sales_map = tables.get("sales_spec_mapping", pd.DataFrame()).copy()
+    product_master = tables.get("product_master", pd.DataFrame()).copy()
+
+    if "商品id" not in orders.columns and "商品ID" in orders.columns:
+        orders = orders.rename(columns={"商品ID": "商品id"})
+    for col in ["商品id", "商品", "商品规格", "商家实收金额(元)"]:
+        if col not in orders.columns:
+            orders[col] = ""
+    orders["商品id"] = orders["商品id"].fillna("").astype(str).str.strip()
+    orders["商品规格"] = orders["商品规格"].fillna("").astype(str).str.strip()
+    orders["商品名称"] = orders["商品"].fillna("").astype(str).str.strip()
+    orders["商家实收金额(元)"] = pd.to_numeric(orders["商家实收金额(元)"], errors="coerce").fillna(0.0)
+
+    orders_summary = (
+        orders.groupby(["商品id", "商品名称", "商品规格"], dropna=False)
+        .agg(订单数=("商品id", "size"), 商家实收金额=("商家实收金额(元)", "sum"))
+        .reset_index()
+    )
+    orders_summary = orders_summary[orders_summary["商品id"] != ""].copy()
+
+    for col in ["商品ID", "商品规格", "销售规格ID"]:
+        if col not in link_map.columns:
+            link_map[col] = ""
+        link_map[col] = link_map[col].fillna("").astype(str).str.strip()
+
+    for col in ["销售规格ID", "标准产品ID", "产品总成本", "快递费"]:
+        if col not in sales_map.columns:
+            sales_map[col] = ""
+    sales_map["销售规格ID"] = sales_map["销售规格ID"].fillna("").astype(str).str.strip()
+    sales_map["标准产品ID"] = sales_map["标准产品ID"].fillna("").astype(str).str.strip()
+    sales_map["产品总成本"] = pd.to_numeric(sales_map["产品总成本"], errors="coerce")
+    sales_map["快递费"] = pd.to_numeric(sales_map["快递费"], errors="coerce")
+
+    if "标准产品ID" not in product_master.columns:
+        product_master["标准产品ID"] = ""
+    product_master["标准产品ID"] = product_master["标准产品ID"].fillna("").astype(str).str.strip()
+
+    link_id_set = set(link_map["商品ID"].tolist())
+    link_pair = link_map[["商品ID", "商品规格", "销售规格ID"]].drop_duplicates()
+    link_pair_set = set(zip(link_pair["商品ID"], link_pair["商品规格"]))
+    link_pair_to_spec = (
+        link_pair.groupby(["商品ID", "商品规格"], dropna=False)["销售规格ID"]
+        .apply(lambda x: next((v for v in x if str(v).strip() != ""), ""))
+        .to_dict()
+    )
+
+    sales_id_set = set(sales_map["销售规格ID"].tolist())
+    sales_lookup = sales_map.drop_duplicates(subset=["销售规格ID"]).set_index("销售规格ID")
+    product_id_set = set(product_master["标准产品ID"].tolist())
+
+    rows: list[dict] = []
+
+    def _add_row(base_row: pd.Series, anomaly_type: str, risk: str, action: str, priority: str, **extra):
+        rows.append(
+            {
+                "异常类型": anomaly_type,
+                "异常优先级": priority,
+                "商品ID": base_row.get("商品id", ""),
+                "商品名称": base_row.get("商品名称", ""),
+                "商品规格": base_row.get("商品规格", ""),
+                "销售规格ID": extra.get("销售规格ID", ""),
+                "标准产品ID": extra.get("标准产品ID", ""),
+                "订单数": int(base_row.get("订单数", 0)),
+                "商家实收金额": float(base_row.get("商家实收金额", 0.0)),
+                "产品总成本": extra.get("产品总成本", np.nan),
+                "快递费": extra.get("快递费", np.nan),
+                "风险说明": risk,
+                "处理建议": action,
+            }
+        )
+
+    for _, row in orders_summary.iterrows():
+        goods_id = row["商品id"]
+        spec = row["商品规格"]
+        has_id = goods_id in link_id_set
+        has_pair = (goods_id, spec) in link_pair_set
+
+        if not has_id:
+            _add_row(
+                row, "新商品ID未维护", "订单商品无法归属到链接规格映射，可能导致后续成本与毛利缺失。",
+                "该商品ID未出现在店铺链接规格映射表，需新增链接规格映射。", "高"
+            )
+            continue
+
+        if not has_pair:
+            _add_row(
+                row, "商品规格未维护", "该商品ID已有维护，但新规格无法映射销售规格ID，影响精细化分析。",
+                "该商品ID存在，但该规格未映射销售规格ID。", "高"
+            )
+            continue
+
+        spec_id = str(link_pair_to_spec.get((goods_id, spec), "")).strip()
+        if spec_id == "":
+            _add_row(
+                row, "销售规格ID缺失", "链接规格映射命中但销售规格ID为空，成本与标准产品无法挂接。",
+                "请在店铺链接规格映射表补充销售规格ID。", "高"
+            )
+            continue
+
+        if spec_id not in sales_id_set:
+            _add_row(
+                row, "销售规格ID未维护", "销售规格ID未进入销售规格映射，成本、快递费及标准产品信息缺失。",
+                "请在销售规格映射表维护该销售规格ID及成本、快递费。", "高", 销售规格ID=spec_id
+            )
+            continue
+
+        sales_row = sales_lookup.loc[spec_id]
+        product_id = str(sales_row.get("标准产品ID", "")).strip()
+        product_cost = sales_row.get("产品总成本", np.nan)
+        ship_fee = sales_row.get("快递费", np.nan)
+
+        if product_id != "" and product_id not in product_id_set:
+            _add_row(
+                row, "标准产品ID未维护", "销售规格已维护但标准产品主档缺失，会影响产品归因和产品看板。",
+                "请在标准产品主档表补充标准产品ID和标准产品名称。", "中",
+                销售规格ID=spec_id, 标准产品ID=product_id, 产品总成本=product_cost, 快递费=ship_fee
+            )
+
+        bad_cost = pd.isna(product_cost) or product_cost == 0
+        bad_ship = pd.isna(ship_fee) or ship_fee == 0
+        if bad_cost or bad_ship:
+            _add_row(
+                row, "成本信息缺失", "成本或快递费缺失会导致毛利测算偏差。",
+                "成本或快递费缺失会影响毛利计算，请及时补全有效数值。", "高",
+                销售规格ID=spec_id, 标准产品ID=product_id, 产品总成本=product_cost, 快递费=ship_fee
+            )
+
+    return pd.DataFrame(rows)
+
+
 def build_analysis_context(
     tables: dict[str, pd.DataFrame],
     filters: dict | None = None,
@@ -52,6 +185,7 @@ def build_analysis_context(
     business_alerts = _build_business_alerts(link_summary, product_summary, spec_summary)
     overview = _analyze_overview(orders, cash_spend)
     exceptions = _analyze_exceptions(tables, orders, promo_by_product, diagnostics)
+    mapping_coverage = analyze_mapping_coverage(tables)
 
     return {
         "orders_enriched": orders,
@@ -64,6 +198,7 @@ def build_analysis_context(
         "business_alerts": business_alerts,
         "overview": overview,
         "exceptions": exceptions,
+        "mapping_coverage": mapping_coverage,
         "store_cash_spend": cash_spend,
         "kpi_assessment": {},
         "date_field_used": "订单成交时间(为空回退支付时间)",

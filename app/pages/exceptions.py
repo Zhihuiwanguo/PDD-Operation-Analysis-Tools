@@ -108,3 +108,38 @@ def render(exceptions: dict):
             else:
                 st.dataframe(df, use_container_width=True)
             st.markdown("---")
+
+
+def render_mapping_coverage(mapping_coverage: pd.DataFrame) -> None:
+    st.markdown("### 商品ID / 规格映射异常")
+    st.caption("该模块默认基于全部上传订单表识别映射覆盖问题，不受当前筛选器影响。")
+
+    df = _ensure_df(mapping_coverage)
+    if df.empty:
+        st.info("未发现商品ID / 商品规格映射异常。")
+        return
+
+    high_count = int((df.get("异常优先级", pd.Series(dtype=str)).astype(str) == "高").sum())
+    if high_count > 0:
+        st.warning(f"存在 {high_count} 条高优先级映射异常，建议优先修复。")
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("异常总数", f"{len(df)}")
+    c2.metric("涉及商品ID数量", f"{df['商品ID'].astype(str).nunique()}")
+    c3.metric("涉及商家实收金额", f"{pd.to_numeric(df['商家实收金额'], errors='coerce').fillna(0).sum():,.2f}")
+
+    show_cols = [
+        "异常类型",
+        "异常优先级",
+        "商品ID",
+        "商品名称",
+        "商品规格",
+        "销售规格ID",
+        "标准产品ID",
+        "订单数",
+        "商家实收金额",
+        "风险说明",
+        "处理建议",
+    ]
+    present_cols = [c for c in show_cols if c in df.columns]
+    st.dataframe(df[present_cols], use_container_width=True)
