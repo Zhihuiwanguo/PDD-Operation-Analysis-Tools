@@ -11,6 +11,7 @@ from app.constants import DATE_CANDIDATE_COLUMNS, NUMERIC_COLUMNS, UPLOAD_SPECS
 from app.data_loader import load_sample_tables, load_table
 from app.exporters import to_excel_bytes
 from app.report_pack import build_ppt_report_pack, to_ppt_report_pack_json
+from app.storage import *
 from app.pages import (
     baibu_vs_normal,
     business_alerts,
@@ -139,18 +140,46 @@ def main() -> None:
 
     full_ctx = build_analysis_context(tables)
     filters = _build_global_filters(full_ctx["orders_enriched"])
-    ctx = build_analysis_context(tables, filters=filters)
+    computed_ctx = build_analysis_context(tables, filters=filters)
+    st.session_state.setdefault("current_ctx", computed_ctx)
+
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("经营参数设置")
+    cfg = load_config()
+    q2_sales_target = st.sidebar.number_input("Q2销售目标", min_value=0.0, value=float(cfg.get("q2_sales_target", 0)), step=1000.0)
+    q2_roi_target = st.sidebar.number_input("Q2 ROI目标", min_value=0.1, value=float(cfg.get("q2_roi_target", 1.0)), step=0.1)
+    gross_margin_warn_pct = st.sidebar.number_input("毛利率预警线(%)", min_value=-100.0, max_value=100.0, value=float(cfg.get("gross_margin_warning", 0.5)), step=0.5)
+    personal_score_pct = st.sidebar.number_input("个人指标得分(%)", min_value=0.0, max_value=200.0, value=float(cfg.get("personal_score", 100)), step=1.0)
+    q2_remaining_days = st.sidebar.number_input("Q2剩余天数", min_value=1, value=30, step=1)
+
+    if st.sidebar.button("保存经营配置"):
+        save_config(
+            {
+                "q2_sales_target": float(q2_sales_target),
+                "q2_roi_target": float(q2_roi_target),
+                "gross_margin_warning": float(gross_margin_warn_pct),
+                "personal_score": float(personal_score_pct),
+            }
+        )
+        st.sidebar.success("经营配置已保存")
+
+    if st.button("加载最近一次分析"):
+        latest = load_latest_analysis()
+        if latest is None:
+            st.warning("未找到历史分析结果。")
+        else:
+            st.session_state["current_ctx"] = latest
+            st.success("已加载最近一次分析。")
+
+    if st.button("保存本次分析"):
+        save_raw_data(computed_ctx["orders_enriched"], computed_ctx.get("promotion_df"))
+        save_analysis_result(computed_ctx)
+        st.success("本次分析已保存。")
+
+    ctx = st.session_state.get("current_ctx", computed_ctx)
 
     st.success("分析完成。")
     st.caption(f"当前日期筛选字段：{ctx['date_field_used']}")
-
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("Q2考核参数")
-    q2_sales_target = st.sidebar.number_input("Q2销售目标", min_value=0.0, value=0.0, step=1000.0)
-    q2_roi_target = st.sidebar.number_input("Q2 ROI目标", min_value=0.1, value=1.9, step=0.1)
-    q2_remaining_days = st.sidebar.number_input("Q2剩余天数", min_value=1, value=30, step=1)
-    personal_score_pct = st.sidebar.number_input("个人指标得分(%)", min_value=0.0, max_value=200.0, value=100.0, step=1.0)
-    gross_margin_warn_pct = st.sidebar.number_input("毛利率预警线(%)", min_value=-100.0, max_value=100.0, value=0.0, step=0.5)
 
     q2_result = compute_kpi_assessment(
         ctx["orders_enriched"],
