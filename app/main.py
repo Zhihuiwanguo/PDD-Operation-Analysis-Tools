@@ -26,7 +26,6 @@ from app.storage import *
 from app.pages import (
     baibu_vs_normal,
     business_alerts,
-    creative_material,
     kpi_assessment,
     exceptions,
     links,
@@ -91,7 +90,6 @@ def _render_uploads() -> dict:
         )
         st.stop()
 
-    tables.setdefault("creative_material", pd.DataFrame())
     tables.setdefault("cashflow", pd.DataFrame())
 
     checks = validate_all(tables)
@@ -231,7 +229,7 @@ def main() -> None:
             + q2_result["经营建议"]
         )
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11 = st.tabs(
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs(
         [
             "经营总览",
             "链接分析",
@@ -239,7 +237,6 @@ def main() -> None:
             "规格分析",
             "百补 vs 日常",
             "推广分析",
-            "推广素材分析",
             "经营异常",
             "异常清单",
             "Q2考核达成率",
@@ -260,15 +257,13 @@ def main() -> None:
     with tab6:
         promotion.render(ctx["promotion_analysis"])
     with tab7:
-        creative_material.render(ctx["creative_material_analysis"])
-    with tab8:
         business_alerts.render(ctx["business_alerts"])
-    with tab9:
+    with tab8:
         exceptions.render(ctx["exceptions"])
         exceptions.render_mapping_coverage(ctx.get("mapping_coverage", pd.DataFrame()))
-    with tab10:
+    with tab9:
         kpi_assessment.render(q2_result)
-    with tab11:
+    with tab10:
         ai_decision.render(ctx=ctx, q2_result=q2_result, notes=get_notes()[:10])
 
     st.markdown("---")
@@ -332,20 +327,6 @@ def main() -> None:
         "商品映射异常": ctx.get("mapping_coverage", pd.DataFrame()),
         "Q2考核达成率": pd.DataFrame([q2_result]),
     }
-
-    creative_ctx = ctx.get("creative_material_analysis", {})
-    if creative_ctx:
-        export_payload.update(
-            {
-                "推广素材分析-商品ID汇总": creative_ctx.get("goods_rollup", pd.DataFrame()),
-                "推广素材分析-素材明细": creative_ctx.get("material_detail", pd.DataFrame()),
-                "推广素材分析-素材类型汇总": creative_ctx.get("type_summary", pd.DataFrame()),
-                **{
-                    f"推广素材异常-{k}": v
-                    for k, v in creative_ctx.get("anomalies", {}).items()
-                },
-            }
-        )
 
     excel_blob = to_excel_bytes(export_payload)
 

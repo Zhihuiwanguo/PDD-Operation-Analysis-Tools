@@ -171,9 +171,6 @@ def build_analysis_context(
             promo_by_product["商品ID"].astype(str).isin(order_goods)
         ]
 
-    creative_material_df = tables.get("creative_material", pd.DataFrame())
-    creative_material_analysis = _analyze_creative_material(creative_material_df, promo_df, filters)
-
     cashflow_df = _apply_cashflow_filters(tables["cashflow"], filters)
     cash_spend = calc_store_cash_spend(cashflow_df)
 
@@ -194,7 +191,6 @@ def build_analysis_context(
         "spec_summary": spec_summary,
         "baibu_vs_normal": baibu_vs_normal,
         "promotion_analysis": promotion_analysis,
-        "creative_material_analysis": creative_material_analysis,
         "business_alerts": business_alerts,
         "overview": overview,
         "exceptions": exceptions,
