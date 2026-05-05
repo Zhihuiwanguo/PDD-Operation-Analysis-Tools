@@ -113,7 +113,15 @@ def _render_uploads() -> dict:
 
     return _prepare_tables(tables)
 
-
+def _normalize_filter_selection(selected, all_options):
+    """默认全选时视为不筛选，避免未映射订单被默认排除。"""
+    selected = list(selected or [])
+    all_options = list(all_options or [])
+    if not selected:
+        return []
+    if set(map(str, selected)) == set(map(str, all_options)):
+        return []
+    return selected
 def _build_global_filters(orders_df: pd.DataFrame) -> dict:
     st.sidebar.header("全局筛选器")
 
@@ -157,12 +165,12 @@ def _build_global_filters(orders_df: pd.DataFrame) -> dict:
     selected_bb = st.sidebar.multiselect("是否百补", bb_opts, default=bb_opts)
 
     return {
-        "date_range": date_range if isinstance(date_range, (tuple, list)) else None,
-        "stores": selected_stores,
-        "product_names": selected_products,
-        "goods_ids": selected_goods,
-        "baibu": selected_bb,
-    }
+    "date_range": date_range if isinstance(date_range, (tuple, list)) else None,
+    "stores": _normalize_filter_selection(selected_stores, stores),
+    "product_names": _normalize_filter_selection(selected_products, products_opt),
+    "goods_ids": _normalize_filter_selection(selected_goods, goods_ids),
+    "baibu": _normalize_filter_selection(selected_bb, bb_opts),
+}
 
 
 def main() -> None:
