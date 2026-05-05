@@ -34,6 +34,7 @@ from app.pages import (
     products,
     promotion,
     specs,
+    ai_decision,
 )
 from app.utils import to_numeric
 from app.validators import validate_all
@@ -209,7 +210,7 @@ def main() -> None:
             + q2_result["经营建议"]
         )
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs(
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11 = st.tabs(
         [
             "经营总览",
             "链接分析",
@@ -221,6 +222,7 @@ def main() -> None:
             "经营异常",
             "异常清单",
             "Q2考核达成率",
+            "🤖 AI经营决策",
         ]
     )
 
@@ -244,6 +246,8 @@ def main() -> None:
         exceptions.render(ctx["exceptions"])
     with tab10:
         kpi_assessment.render(q2_result)
+    with tab11:
+        ai_decision.render(ctx=ctx, q2_result=q2_result, notes=get_notes()[:10])
 
     st.markdown("---")
     st.subheader("产品标签（简单版）")
