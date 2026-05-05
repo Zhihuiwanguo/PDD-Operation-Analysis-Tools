@@ -73,6 +73,27 @@ def _render_uploads() -> dict:
         st.warning("请上传全部必需文件后再分析。")
         return {}
 
+    required_table_keys = {
+        "product_master": "标准产品主档表",
+        "sales_spec_mapping": "销售规格映射表",
+        "link_spec_mapping": "店铺链接规格映射表",
+        "orders": "拼多多原始订单表",
+        "promotion": "拼多多推广汇总表",
+    }
+
+    missing_required = [
+        label for key, label in required_table_keys.items() if key not in tables
+    ]
+    if missing_required:
+        st.error("缺少必需数据表：" + "、".join(missing_required))
+        st.info(
+            "请上传完整的订单表、推广表、产品主档表、销售规格映射表、店铺链接规格映射表后再分析。"
+        )
+        st.stop()
+
+    tables.setdefault("creative_material", pd.DataFrame())
+    tables.setdefault("cashflow", pd.DataFrame())
+
     checks = validate_all(tables)
     st.subheader("校验结果")
     for r in checks:
