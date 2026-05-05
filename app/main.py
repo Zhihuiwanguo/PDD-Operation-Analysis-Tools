@@ -9,6 +9,17 @@ from app.analyzers import build_analysis_context, compute_kpi_assessment
 from app.config import CONFIG
 from app.constants import DATE_CANDIDATE_COLUMNS, NUMERIC_COLUMNS, UPLOAD_SPECS
 from app.data_loader import load_sample_tables, load_table
+from app.database import (
+    add_note,
+    add_product_tag,
+    get_notes,
+    get_product_tags,
+    init_db,
+    load_config as load_config_db,
+    load_latest_analysis as load_latest_analysis_db,
+    save_analysis,
+    save_config as save_config_db,
+)
 from app.exporters import to_excel_bytes
 from app.report_pack import build_ppt_report_pack, to_ppt_report_pack_json
 from app.storage import *
@@ -29,6 +40,7 @@ from app.validators import validate_all
 
 st.set_page_config(page_title="艾兰得拼多多经营分析系统", layout="wide")
 st.title("艾兰得拼多多经营分析系统")
+init_db()
 
 
 def _prepare_tables(raw_tables):
@@ -145,7 +157,7 @@ def main() -> None:
 
     st.sidebar.markdown("---")
     st.sidebar.subheader("经营参数设置")
-    cfg = load_config()
+    cfg = load_config_db()
     q2_sales_target = st.sidebar.number_input("Q2销售目标", min_value=0.0, value=float(cfg.get("q2_sales_target", 0)), step=1000.0)
     q2_roi_target = st.sidebar.number_input("Q2 ROI目标", min_value=0.1, value=float(cfg.get("q2_roi_target", 1.0)), step=0.1)
     gross_margin_warn_pct = st.sidebar.number_input("毛利率预警线(%)", min_value=-100.0, max_value=100.0, value=float(cfg.get("gross_margin_warning", 0.5)), step=0.5)
@@ -153,7 +165,7 @@ def main() -> None:
     q2_remaining_days = st.sidebar.number_input("Q2剩余天数", min_value=1, value=30, step=1)
 
     if st.sidebar.button("保存经营配置"):
-        save_config(
+        save_config_db(
             {
                 "q2_sales_target": float(q2_sales_target),
                 "q2_roi_target": float(q2_roi_target),
@@ -164,7 +176,7 @@ def main() -> None:
         st.sidebar.success("经营配置已保存")
 
     if st.button("加载最近一次分析"):
-        latest = load_latest_analysis()
+        latest = load_latest_analysis_db()
         if latest is None:
             st.warning("未找到历史分析结果。")
         else:
@@ -174,6 +186,7 @@ def main() -> None:
     if st.button("保存本次分析"):
         save_raw_data(computed_ctx["orders_enriched"], computed_ctx.get("promotion_df"))
         save_analysis_result(computed_ctx)
+        save_analysis(computed_ctx)
         st.success("本次分析已保存。")
 
     ctx = st.session_state.get("current_ctx", computed_ctx)
@@ -231,6 +244,51 @@ def main() -> None:
         exceptions.render(ctx["exceptions"])
     with tab10:
         kpi_assessment.render(q2_result)
+
+    st.markdown("---")
+    st.subheader("产品标签（简单版）")
+    c1, c2, c3 = st.columns([2, 1, 1])
+    with c1:
+        tag_product = st.text_input("产品名称", key="tag_product")
+    with c2:
+        tag_value = st.selectbox("标签", ["主推", "清库存", "高利润", "低ROI"], key="tag_value")
+    with c3:
+        st.write("")
+        if st.button("为该产品添加标签"):
+            if tag_product.strip():
+                add_product_tag(tag_product.strip(), tag_value)
+                st.success("产品标签已保存")
+            else:
+                st.warning("请先输入产品名称")
+
+    if tag_product.strip():
+        tags = get_product_tags(tag_product.strip())
+        if tags:
+            st.caption(f"当前产品已有标签：{', '.join(tags[:10])}")
+
+    st.subheader("经营备注")
+    n1, n2 = st.columns([1, 2])
+    with n1:
+        note_date = st.date_input("备注日期")
+        note_type_cn = st.selectbox("类型", ["整体", "产品", "链接"])
+    with n2:
+        note_target = st.text_input("目标（产品名或链接名）")
+        note_text = st.text_area("备注内容")
+
+    note_type_map = {"整体": "overall", "产品": "product", "链接": "link"}
+    if st.button("保存备注"):
+        if note_text.strip():
+            add_note(str(note_date), note_type_map[note_type_cn], note_target.strip(), note_text.strip())
+            st.success("备注已保存")
+        else:
+            st.warning("备注内容不能为空")
+
+    st.markdown("**最近10条备注**")
+    recent_notes = get_notes()[:10]
+    if recent_notes:
+        st.table(pd.DataFrame(recent_notes))
+    else:
+        st.caption("暂无经营备注")
 
     export_payload = {
         "经营总览": pd.DataFrame([ctx["overview"]["metrics"]]),
