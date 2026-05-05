@@ -48,25 +48,6 @@ UPLOAD_SPECS: tuple[UploadSpec, ...] = (
         required_columns=("日期", "商品ID", "实际成交花费(元)"),
     ),
     UploadSpec(
-        key="creative_material",
-        label="拼多多推广素材表现表",
-        required_columns=(
-            "店铺名称",
-            "商品ID",
-            "素材编号",
-            "素材名称",
-            "开始日期",
-            "结束日期",
-            "数据口径",
-            "统计天数",
-            "曝光量",
-            "点击量",
-            "交易额(元)",
-            "净交易额(元)",
-            "点击转化率",
-        ),
-    ),
-    UploadSpec(
         key="cashflow",
         label="推广账户每日流水表",
         required_columns=("时间", "交易金额", "流水类型"),
@@ -87,7 +68,6 @@ PROMOTION_SPEND_COLUMN_ALIASES: tuple[str, ...] = (
 DATE_CANDIDATE_COLUMNS: dict[str, tuple[str, ...]] = {
     "orders": ("订单成交时间", "支付时间"),
     "promotion": ("日期",),
-    "creative_material": ("开始日期", "结束日期"),
     "cashflow": ("时间", "日期"),
 }
 
@@ -101,20 +81,6 @@ NUMERIC_COLUMNS: dict[str, tuple[str, ...]] = {
         "点击量",
         "成交订单数",
         "净交易额(元)",
-    ),
-    "creative_material": (
-        "交易额(元)",
-        "成交笔数",
-        "每笔成交金额(元)",
-        "曝光量",
-        "点击量",
-        "点击率",
-        "净成交笔数",
-        "每笔净成交金额(元)",
-        "净交易额占比",
-        "净成交笔数占比",
-        "净交易额(元)",
-        "点击转化率",
     ),
     "cashflow": ("交易金额", "现金支出"),
 }
