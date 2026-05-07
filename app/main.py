@@ -24,6 +24,15 @@ from app.database import (
 from app.exporters import to_excel_bytes
 from app.report_pack import build_ppt_report_pack, to_ppt_report_pack_json
 from app.storage import *
+from app.history_store import (
+    get_history_stats,
+    init_history_db,
+    list_upload_batches,
+    load_history_tables,
+    save_master_table_history,
+    save_orders_history,
+    save_promotion_history,
+)
 from app.pages import (
     baibu_vs_normal,
     business_alerts,
@@ -37,6 +46,7 @@ from app.pages import (
     segmentation,
     specs,
     ai_decision,
+    history_data,
 )
 from app.utils import to_numeric
 from app.validators import validate_all
@@ -45,6 +55,7 @@ from app.validators import validate_all
 st.set_page_config(page_title="艾兰得拼多多经营分析系统", layout="wide")
 st.title("艾兰得拼多多经营分析系统")
 init_db()
+init_history_db()
 
 
 def _prepare_tables(raw_tables: dict) -> dict:
@@ -54,29 +65,68 @@ def _prepare_tables(raw_tables: dict) -> dict:
     return out
 
 
-def _render_uploads() -> dict:
+def _render_uploads() -> tuple[dict, dict]:
     st.header("A/B. 数据上传与校验")
+    mode = st.radio("数据来源模式", ["单次上传分析", "历史数据库分析"], index=0, horizontal=True)
+    st.info(f"当前为{mode}")
 
-    # 重要：默认不使用样例数据，避免误以为上传新表不生效
-    use_sample = st.checkbox("使用 sample_data 样例文件快速调试", value=False)
+    tables = {}
+    meta = {"mode": mode, "history_range": None}
 
-    if use_sample:
-        st.info("当前使用 sample_data 样例文件。")
-        tables = load_sample_tables(CONFIG.sample_data_dir)
+    if mode == "单次上传分析":
+        use_sample = st.checkbox("使用 sample_data 样例文件快速调试", value=False)
+        if use_sample:
+            st.info("当前使用 sample_data 样例文件。")
+            tables = load_sample_tables(CONFIG.sample_data_dir)
+        else:
+            for spec in UPLOAD_SPECS:
+                file = st.file_uploader(f"上传{spec.label}", type=["csv", "xlsx", "xls"], key=f"upload_single_{spec.key}")
+                if file is not None:
+                    tables[spec.key] = load_table(file, file.name, key=spec.key)
+
+        if not tables:
+            st.warning("请上传全部必需文件后再分析。")
+            return {}, meta
     else:
-        tables = {}
-        for spec in UPLOAD_SPECS:
-            file = st.file_uploader(
-                f"上传{spec.label}",
-                type=["csv", "xlsx", "xls"],
-                key=f"upload_{spec.key}",
-            )
+        upload_map = {}
+        label_map = {
+            "orders": "上传本期订单表（可选）",
+            "promotion": "上传本期推广表（可选）",
+            "product_master": "上传/更新产品主档表（可选）",
+            "sales_spec_mapping": "上传/更新销售规格映射表（可选）",
+            "link_spec_mapping": "上传/更新店铺链接规格映射表（可选）",
+        }
+        for key, label in label_map.items():
+            file = st.file_uploader(label, type=["csv", "xlsx", "xls"], key=f"upload_hist_{key}")
             if file is not None:
-                tables[spec.key] = load_table(file, file.name, key=spec.key)
+                upload_map[key] = (file.name, load_table(file, file.name, key=key))
 
-    if not tables:
-        st.warning("请上传全部必需文件后再分析。")
-        return {}
+        if st.button("保存上传数据到历史数据库"):
+            for key, item in upload_map.items():
+                fname, df = item
+                if key == "orders":
+                    st.write(save_orders_history(df, fname))
+                elif key == "promotion":
+                    st.write(save_promotion_history(df, fname))
+                else:
+                    st.write(save_master_table_history(key, df, fname))
+            st.success("历史数据保存完成")
+
+        stats = get_history_stats()
+        d0 = pd.to_datetime(stats.get("order_min") or stats.get("promo_min"), errors="coerce")
+        d1 = pd.to_datetime(stats.get("order_max") or stats.get("promo_max"), errors="coerce")
+        if pd.isna(d0) or pd.isna(d1):
+            st.warning("历史库暂无可分析日期，请先保存订单/推广数据。")
+            return {}, meta
+        date_range = st.date_input("历史日期范围", value=(d0.date(), d1.date()))
+        if st.button("从历史数据库加载并分析"):
+            ds, de = (date_range if isinstance(date_range, (tuple, list)) and len(date_range) == 2 else (d0.date(), d1.date()))
+            tables = load_history_tables(ds, de)
+            meta["history_range"] = (str(ds), str(de))
+
+        if not tables:
+            st.info("请点击“从历史数据库加载并分析”。")
+            return {}, meta
 
     required_table_keys = {
         "product_master": "标准产品主档表",
@@ -85,41 +135,25 @@ def _render_uploads() -> dict:
         "orders": "拼多多原始订单表",
         "promotion": "拼多多推广汇总表",
     }
-    missing_required = [
-        label for key, label in required_table_keys.items() if key not in tables
-    ]
+    missing_required = [label for key, label in required_table_keys.items() if key not in tables or tables[key].empty]
     if missing_required:
         st.error("缺少必需数据表：" + "、".join(missing_required))
-        st.info("请上传完整的订单表、推广表、产品主档表、销售规格映射表、店铺链接规格映射表后再分析。")
         st.stop()
 
-    # 可选表兜底
     tables.setdefault("cashflow", pd.DataFrame())
-
     checks = validate_all(tables)
     st.subheader("校验结果")
-
     for r in checks:
         with st.container(border=True):
             st.markdown(f"**{r.label}**")
             st.write(f"记录数: {r.record_count}")
-
-            date_cols = DATE_CANDIDATE_COLUMNS.get(r.key, tuple())
-            if date_cols and r.date_min and r.date_max:
-                st.write(f"日期范围: {r.date_min} ~ {r.date_max}")
-
             if r.ok:
                 st.success("字段校验通过")
             else:
                 st.error(f"缺失关键字段: {', '.join(r.missing_columns)}")
-
-            if r.extra_message:
-                st.warning(r.extra_message)
-
     if not all(r.ok for r in checks):
         st.stop()
-
-    return _prepare_tables(tables)
+    return _prepare_tables(tables), meta
 
 
 def _normalize_filter_selection(selected, all_options):
@@ -237,7 +271,7 @@ def _render_current_data_summary(ctx: dict) -> None:
 
 
 def main() -> None:
-    tables = _render_uploads()
+    tables, source_meta = _render_uploads()
     if not tables:
         return
 
@@ -326,6 +360,11 @@ def main() -> None:
         ctx = computed_ctx
 
     st.success("分析完成。")
+    if source_meta.get("mode") == "历史数据库分析":
+        rng = source_meta.get("history_range") or ("-", "-")
+        st.info(f"当前为历史数据库分析：日期范围 {rng[0]} ~ {rng[1]}")
+    else:
+        st.info("当前为单次上传分析")
     st.caption(f"当前日期筛选字段：{ctx['date_field_used']}")
     _render_current_data_summary(ctx)
 
@@ -345,7 +384,7 @@ def main() -> None:
             + q2_result["经营建议"]
         )
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12 = st.tabs(
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13 = st.tabs(
         [
             "数据质量检查",
             "经营分层",
@@ -359,6 +398,7 @@ def main() -> None:
             "异常清单",
             "Q2考核达成率",
             "🤖 AI经营决策",
+            "历史数据管理",
         ]
     )
 
@@ -398,6 +438,9 @@ def main() -> None:
 
     with tab12:
         ai_decision.render(ctx=ctx, q2_result=q2_result, notes=get_notes()[:10])
+
+    with tab13:
+        history_data.render()
 
     st.markdown("---")
     st.subheader("产品标签（简单版）")
@@ -491,6 +534,8 @@ def main() -> None:
         "待维护-销售规格映射": ctx.get("mapping_maintenance_lists", {}).get("待维护销售规格映射表", pd.DataFrame()),
         "待维护-标准产品主档": ctx.get("mapping_maintenance_lists", {}).get("待维护标准产品主档表", pd.DataFrame()),
         "Q2考核达成率": pd.DataFrame([q2_result]),
+        "历史上传批次": list_upload_batches(200),
+        "数据来源说明": pd.DataFrame([{"数据来源": "历史数据库" if source_meta.get("mode") == "历史数据库分析" else "单次上传", "历史查询日期范围": " ~ ".join(source_meta.get("history_range") or ("", ""))}]),
     }
 
     excel_blob = to_excel_bytes(export_payload)
