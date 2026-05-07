@@ -8,6 +8,7 @@ from . import (
     overview,
     products,
     promotion,
+    segmentation,
     specs,
 )
 
@@ -19,6 +20,7 @@ __all__ = [
     "data_quality",
     "baibu_vs_normal",
     "promotion",
+    "segmentation",
     "business_alerts",
     "exceptions",
     "kpi_assessment",

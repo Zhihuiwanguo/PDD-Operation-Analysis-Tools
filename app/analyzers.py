@@ -20,6 +20,7 @@ from app.data_diagnostics import (
     diagnose_sales_difference,
 )
 from app.utils import safe_divide
+from app.segmentation import segment_links, segment_products
 
 
 def analyze_mapping_coverage(tables: dict[str, pd.DataFrame]) -> pd.DataFrame:
@@ -212,6 +213,8 @@ def build_analysis_context(
     ctx["upload_batch_info"] = upload_batch_info
     ctx["date_consistency"] = date_consistency
     ctx["sales_difference_diagnosis"] = diagnose_sales_difference(ctx)
+    ctx["product_segmentation"] = segment_products(product_summary)
+    ctx["link_segmentation"] = segment_links(link_summary)
     return ctx
 
 
