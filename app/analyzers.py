@@ -13,6 +13,12 @@ from app.calculators import (
 )
 from app.config import CONFIG
 from app.constants import PROMOTION_SPEND_COLUMN_ALIASES
+from app.data_diagnostics import (
+    build_mapping_maintenance_lists,
+    build_upload_batch_info,
+    check_order_promotion_date_consistency,
+    diagnose_sales_difference,
+)
 from app.utils import safe_divide
 
 
@@ -183,8 +189,10 @@ def build_analysis_context(
     overview = _analyze_overview(orders, cash_spend)
     exceptions = _analyze_exceptions(tables, orders, promo_by_product, diagnostics)
     mapping_coverage = analyze_mapping_coverage(tables)
+    upload_batch_info = build_upload_batch_info(tables)
+    date_consistency = check_order_promotion_date_consistency(tables)
 
-    return {
+    ctx = {
         "orders_enriched": orders,
         "link_summary": link_summary,
         "product_summary": product_summary,
@@ -199,6 +207,12 @@ def build_analysis_context(
         "kpi_assessment": {},
         "date_field_used": "订单成交时间(为空回退支付时间)",
     }
+
+    ctx["mapping_maintenance_lists"] = build_mapping_maintenance_lists(mapping_coverage)
+    ctx["upload_batch_info"] = upload_batch_info
+    ctx["date_consistency"] = date_consistency
+    ctx["sales_difference_diagnosis"] = diagnose_sales_difference(ctx)
+    return ctx
 
 
 def _apply_order_filters(orders: pd.DataFrame, filters: dict | None) -> pd.DataFrame:

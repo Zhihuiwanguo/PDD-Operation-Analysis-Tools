@@ -1,6 +1,7 @@
 from . import (
     baibu_vs_normal,
     business_alerts,
+    data_quality,
     exceptions,
     kpi_assessment,
     links,
@@ -15,6 +16,7 @@ __all__ = [
     "links",
     "products",
     "specs",
+    "data_quality",
     "baibu_vs_normal",
     "promotion",
     "business_alerts",

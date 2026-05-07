@@ -6,6 +6,7 @@ import pandas as pd
 import streamlit as st
 
 from app.analyzers import build_analysis_context, compute_kpi_assessment
+from app.data_diagnostics import diagnose_sales_difference
 from app.config import CONFIG
 from app.constants import DATE_CANDIDATE_COLUMNS, NUMERIC_COLUMNS, UPLOAD_SPECS
 from app.data_loader import load_sample_tables, load_table
@@ -26,6 +27,7 @@ from app.storage import *
 from app.pages import (
     baibu_vs_normal,
     business_alerts,
+    data_quality,
     kpi_assessment,
     exceptions,
     links,
@@ -241,6 +243,7 @@ def main() -> None:
     full_ctx = build_analysis_context(tables)
     filters = _build_global_filters(full_ctx["orders_enriched"])
     computed_ctx = build_analysis_context(tables, filters=filters)
+    computed_ctx["sales_difference_diagnosis"] = diagnose_sales_difference(computed_ctx, full_ctx=full_ctx)
 
     st.sidebar.markdown("---")
     st.sidebar.subheader("经营参数设置")
@@ -341,8 +344,9 @@ def main() -> None:
             + q2_result["经营建议"]
         )
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs(
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11 = st.tabs(
         [
+            "数据质量检查",
             "经营总览",
             "链接分析",
             "产品分析",
@@ -357,34 +361,37 @@ def main() -> None:
     )
 
     with tab1:
-        overview.render(ctx["overview"])
+        data_quality.render(ctx)
 
     with tab2:
-        links.render(ctx["link_summary"])
+        overview.render(ctx["overview"])
 
     with tab3:
-        products.render(ctx["product_summary"])
+        links.render(ctx["link_summary"])
 
     with tab4:
-        specs.render(ctx["spec_summary"])
+        products.render(ctx["product_summary"])
 
     with tab5:
-        baibu_vs_normal.render(ctx["baibu_vs_normal"])
+        specs.render(ctx["spec_summary"])
 
     with tab6:
-        promotion.render(ctx["promotion_analysis"])
+        baibu_vs_normal.render(ctx["baibu_vs_normal"])
 
     with tab7:
-        business_alerts.render(ctx["business_alerts"])
+        promotion.render(ctx["promotion_analysis"])
 
     with tab8:
+        business_alerts.render(ctx["business_alerts"])
+
+    with tab9:
         exceptions.render(ctx["exceptions"])
         exceptions.render_mapping_coverage(ctx.get("mapping_coverage", pd.DataFrame()))
 
-    with tab9:
+    with tab10:
         kpi_assessment.render(q2_result)
 
-    with tab10:
+    with tab11:
         ai_decision.render(ctx=ctx, q2_result=q2_result, notes=get_notes()[:10])
 
     st.markdown("---")
@@ -459,6 +466,23 @@ def main() -> None:
         **{f"经营异常-{k}": v for k, v in ctx["business_alerts"].items()},
         **{f"异常-{k}": v for k, v in ctx["exceptions"].items()},
         "商品映射异常": ctx.get("mapping_coverage", pd.DataFrame()),
+        "数据质量-上传批次": pd.DataFrame([
+            {
+                "批次ID": ctx.get("upload_batch_info", {}).get("batch_id"),
+                "表key": k,
+                "表名": v.get("table_name"),
+                "记录数": v.get("rows"),
+                "字段数": v.get("columns"),
+                "日期开始": v.get("date_min"),
+                "日期结束": v.get("date_max"),
+            }
+            for k, v in (ctx.get("upload_batch_info", {}).get("tables") or {}).items()
+        ]),
+        "数据质量-日期一致性": pd.DataFrame([ctx.get("date_consistency", {})]),
+        "数据质量-差异诊断": pd.DataFrame([ctx.get("sales_difference_diagnosis", {})]),
+        "待维护-店铺链接规格映射": ctx.get("mapping_maintenance_lists", {}).get("待维护店铺链接规格映射表", pd.DataFrame()),
+        "待维护-销售规格映射": ctx.get("mapping_maintenance_lists", {}).get("待维护销售规格映射表", pd.DataFrame()),
+        "待维护-标准产品主档": ctx.get("mapping_maintenance_lists", {}).get("待维护标准产品主档表", pd.DataFrame()),
         "Q2考核达成率": pd.DataFrame([q2_result]),
     }
 
