@@ -34,6 +34,7 @@ from app.pages import (
     overview,
     products,
     promotion,
+    segmentation,
     specs,
     ai_decision,
 )
@@ -344,9 +345,10 @@ def main() -> None:
             + q2_result["经营建议"]
         )
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11 = st.tabs(
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12 = st.tabs(
         [
             "数据质量检查",
+            "经营分层",
             "经营总览",
             "链接分析",
             "产品分析",
@@ -364,34 +366,37 @@ def main() -> None:
         data_quality.render(ctx)
 
     with tab2:
-        overview.render(ctx["overview"])
+        segmentation.render(ctx.get("product_segmentation", pd.DataFrame()), ctx.get("link_segmentation", pd.DataFrame()))
 
     with tab3:
-        links.render(ctx["link_summary"])
+        overview.render(ctx["overview"])
 
     with tab4:
-        products.render(ctx["product_summary"])
+        links.render(ctx["link_summary"])
 
     with tab5:
-        specs.render(ctx["spec_summary"])
+        products.render(ctx["product_summary"])
 
     with tab6:
-        baibu_vs_normal.render(ctx["baibu_vs_normal"])
+        specs.render(ctx["spec_summary"])
 
     with tab7:
-        promotion.render(ctx["promotion_analysis"])
+        baibu_vs_normal.render(ctx["baibu_vs_normal"])
 
     with tab8:
-        business_alerts.render(ctx["business_alerts"])
+        promotion.render(ctx["promotion_analysis"])
 
     with tab9:
+        business_alerts.render(ctx["business_alerts"])
+
+    with tab10:
         exceptions.render(ctx["exceptions"])
         exceptions.render_mapping_coverage(ctx.get("mapping_coverage", pd.DataFrame()))
 
-    with tab10:
+    with tab11:
         kpi_assessment.render(q2_result)
 
-    with tab11:
+    with tab12:
         ai_decision.render(ctx=ctx, q2_result=q2_result, notes=get_notes()[:10])
 
     st.markdown("---")
@@ -455,6 +460,8 @@ def main() -> None:
     export_payload = {
         "经营总览": pd.DataFrame([ctx["overview"]["metrics"]]),
         "经营总览-每日趋势": ctx["overview"]["daily_trend"],
+        "产品经营分层": ctx.get("product_segmentation", pd.DataFrame()),
+        "链接经营分层": ctx.get("link_segmentation", pd.DataFrame()),
         "链接分析": ctx["link_summary"],
         "产品分析": ctx["product_summary"],
         "规格分析": ctx["spec_summary"],
