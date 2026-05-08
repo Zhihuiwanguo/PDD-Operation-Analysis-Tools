@@ -114,6 +114,8 @@ def _render_uploads() -> tuple[dict, dict]:
                 for key, item in upload_map.items():
                     fname, df = item
                     if key == "orders":
+                        if len(df) > 5000:
+                            st.info("正在批量写入历史数据库，数据量较大，请稍候。系统会自动去重，不会重复累计销售额。")
                         st.write(save_orders_history(df, fname))
                     elif key == "promotion":
                         st.write(save_promotion_history(df, fname))

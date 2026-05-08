@@ -21,6 +21,8 @@ from sqlalchemy import (
     insert,
     select,
 )
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from sqlalchemy.exc import OperationalError
 
@@ -161,22 +163,24 @@ def save_orders_history(orders_df: pd.DataFrame, file_name: str | None = None) -
 
     inserted = updated = skipped = 0
     all_dates = []
-    with _engine().begin() as conn:
-        for idx, row in orders_df.fillna("").iterrows():
-            raw = row.to_dict()
-            order_date = _date(raw.get(date_col)) if date_col else ""
-            pay_date = _date(raw.get(pay_col)) if pay_col else ""
-            effective_date = order_date or pay_date
-            if effective_date:
-                all_dates.append(effective_date)
+    chunk_size = 1000
+    payloads: list[dict] = []
+    for idx, row in orders_df.fillna("").iterrows():
+        raw = row.to_dict()
+        order_date = _date(raw.get(date_col)) if date_col else ""
+        pay_date = _date(raw.get(pay_col)) if pay_col else ""
+        effective_date = order_date or pay_date
+        if effective_date:
+            all_dates.append(effective_date)
 
-            if key_col and _text(raw.get(key_col)):
-                order_key = _text(raw.get(key_col))
-            else:
-                fallback = f"{_text(raw.get(goods_id_col))}|{_text(raw.get('商品规格'))}|{pay_date}|{_text(raw.get(recv_col))}|{idx}"
-                order_key = hashlib.md5(fallback.encode()).hexdigest()
+        if key_col and _text(raw.get(key_col)):
+            order_key = _text(raw.get(key_col))
+        else:
+            fallback = f"{_text(raw.get(goods_id_col))}|{_text(raw.get('商品规格'))}|{pay_date}|{_text(raw.get(recv_col))}|{idx}"
+            order_key = hashlib.md5(fallback.encode()).hexdigest()
 
-            payload = {
+        payloads.append(
+            {
                 "order_key": order_key,
                 "store_name": _text(raw.get("店铺名称")),
                 "goods_id": _text(raw.get(goods_id_col)) if goods_id_col else "",
@@ -191,13 +195,50 @@ def save_orders_history(orders_df: pd.DataFrame, file_name: str | None = None) -
                 "batch_id": batch_id,
                 "uploaded_at": datetime.utcnow().isoformat(),
             }
-            exists = conn.execute(select(orders_raw.c.id).where(orders_raw.c.order_key == order_key)).first()
-            if exists:
-                conn.execute(orders_raw.update().where(orders_raw.c.order_key == order_key).values(**payload))
-                updated += 1
+        )
+
+    eng = _engine()
+    with eng.begin() as conn:
+        try:
+            conn.exec_driver_sql("SET statement_timeout = '120s'")
+        except Exception:
+            pass
+        dialect = eng.dialect.name
+        for start in range(0, len(payloads), chunk_size):
+            chunk = payloads[start : start + chunk_size]
+            if not chunk:
+                continue
+            keys = list({item["order_key"] for item in chunk if item.get("order_key")})
+            existing_keys = set()
+            if keys:
+                existing_keys = set(conn.execute(select(orders_raw.c.order_key).where(orders_raw.c.order_key.in_(keys))).scalars().all())
+            updated += len(existing_keys)
+            inserted += len(keys) - len(existing_keys)
+
+            if dialect == "postgresql":
+                stmt = pg_insert(orders_raw).values(chunk)
+            elif dialect == "sqlite":
+                stmt = sqlite_insert(orders_raw).values(chunk)
             else:
-                conn.execute(insert(orders_raw).values(**payload))
-                inserted += 1
+                raise RuntimeError(f"unsupported db dialect: {dialect}")
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["order_key"],
+                set_={
+                    "store_name": stmt.excluded.store_name,
+                    "goods_id": stmt.excluded.goods_id,
+                    "goods_name": stmt.excluded.goods_name,
+                    "goods_spec": stmt.excluded.goods_spec,
+                    "order_status": stmt.excluded.order_status,
+                    "after_sale_status": stmt.excluded.after_sale_status,
+                    "order_date": stmt.excluded.order_date,
+                    "pay_date": stmt.excluded.pay_date,
+                    "merchant_receivable": stmt.excluded.merchant_receivable,
+                    "raw_json": stmt.excluded.raw_json,
+                    "batch_id": stmt.excluded.batch_id,
+                    "uploaded_at": stmt.excluded.uploaded_at,
+                },
+            )
+            conn.execute(stmt)
 
         file_hash = hashlib.md5(pd.util.hash_pandas_object(orders_df.astype(str), index=True).values.tobytes()).hexdigest() if not orders_df.empty else ""
         dmin, dmax = (min(all_dates), max(all_dates)) if all_dates else ("", "")
@@ -214,18 +255,20 @@ def save_promotion_history(promo_df: pd.DataFrame, file_name: str | None = None)
     goods_id_col = _col(promo_df, ("商品ID", "商品id"))
     inserted = updated = skipped = 0
     all_dates = []
-    with _engine().begin() as conn:
-        for idx, row in promo_df.fillna("").iterrows():
-            raw = row.to_dict()
-            promo_date = _date(raw.get(date_col)) if date_col else ""
-            if promo_date:
-                all_dates.append(promo_date)
-            core_hash = _hash_row({"goods_id": _text(raw.get(goods_id_col)) if goods_id_col else "", "promo_date": promo_date, "spend": _text(raw.get(spend_col)) if spend_col else "", "row": raw})
-            if promo_date and goods_id_col:
-                promo_key = f"{_text(raw.get(goods_id_col))}|{promo_date}|{core_hash[:12]}"
-            else:
-                promo_key = f"{batch_id}|{idx}|{core_hash}"
-            payload = {
+    chunk_size = 1000
+    payloads: list[dict] = []
+    for idx, row in promo_df.fillna("").iterrows():
+        raw = row.to_dict()
+        promo_date = _date(raw.get(date_col)) if date_col else ""
+        if promo_date:
+            all_dates.append(promo_date)
+        core_hash = _hash_row({"goods_id": _text(raw.get(goods_id_col)) if goods_id_col else "", "promo_date": promo_date, "spend": _text(raw.get(spend_col)) if spend_col else "", "row": raw})
+        if promo_date and goods_id_col:
+            promo_key = f"{_text(raw.get(goods_id_col))}|{promo_date}|{core_hash[:12]}"
+        else:
+            promo_key = f"{batch_id}|{idx}|{core_hash}"
+        payloads.append(
+            {
                 "promo_key": promo_key,
                 "store_name": _text(raw.get("店铺名称")),
                 "goods_id": _text(raw.get(goods_id_col)) if goods_id_col else "",
@@ -236,13 +279,45 @@ def save_promotion_history(promo_df: pd.DataFrame, file_name: str | None = None)
                 "batch_id": batch_id,
                 "uploaded_at": datetime.utcnow().isoformat(),
             }
-            exists = conn.execute(select(promotion_raw.c.id).where(promotion_raw.c.promo_key == promo_key)).first()
-            if exists:
-                conn.execute(promotion_raw.update().where(promotion_raw.c.promo_key == promo_key).values(**payload))
-                updated += 1
+        )
+    eng = _engine()
+    with eng.begin() as conn:
+        try:
+            conn.exec_driver_sql("SET statement_timeout = '120s'")
+        except Exception:
+            pass
+        dialect = eng.dialect.name
+        for start in range(0, len(payloads), chunk_size):
+            chunk = payloads[start : start + chunk_size]
+            if not chunk:
+                continue
+            keys = list({item["promo_key"] for item in chunk if item.get("promo_key")})
+            existing_keys = set()
+            if keys:
+                existing_keys = set(conn.execute(select(promotion_raw.c.promo_key).where(promotion_raw.c.promo_key.in_(keys))).scalars().all())
+            updated += len(existing_keys)
+            inserted += len(keys) - len(existing_keys)
+
+            if dialect == "postgresql":
+                stmt = pg_insert(promotion_raw).values(chunk)
+            elif dialect == "sqlite":
+                stmt = sqlite_insert(promotion_raw).values(chunk)
             else:
-                conn.execute(insert(promotion_raw).values(**payload))
-                inserted += 1
+                raise RuntimeError(f"unsupported db dialect: {dialect}")
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["promo_key"],
+                set_={
+                    "store_name": stmt.excluded.store_name,
+                    "goods_id": stmt.excluded.goods_id,
+                    "promo_date": stmt.excluded.promo_date,
+                    "spend": stmt.excluded.spend,
+                    "transaction_amount": stmt.excluded.transaction_amount,
+                    "raw_json": stmt.excluded.raw_json,
+                    "batch_id": stmt.excluded.batch_id,
+                    "uploaded_at": stmt.excluded.uploaded_at,
+                },
+            )
+            conn.execute(stmt)
         file_hash = hashlib.md5(pd.util.hash_pandas_object(promo_df.astype(str), index=True).values.tobytes()).hexdigest() if not promo_df.empty else ""
         dmin, dmax = (min(all_dates), max(all_dates)) if all_dates else ("", "")
         _insert_batch(conn, batch_id, "promotion", file_name, len(promo_df), dmin, dmax, file_hash)
