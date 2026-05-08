@@ -34,7 +34,54 @@ def _engine():
     url = get_database_url(); Path('/tmp/aland_history').mkdir(parents=True, exist_ok=True)
     return create_engine(url, pool_pre_ping=True, connect_args={"check_same_thread": False} if url.startswith("sqlite") else {})
 
-def init_history_db(): metadata.create_all(_engine())
+def init_history_db():
+    metadata.create_all(_engine())
+    ensure_history_schema()
+
+
+def ensure_history_schema():
+    eng = _engine()
+    with eng.begin() as conn:
+        if eng.dialect.name == "postgresql":
+            conn.exec_driver_sql("ALTER TABLE IF EXISTS orders_raw ADD COLUMN IF NOT EXISTS platform VARCHAR DEFAULT '拼多多';")
+            conn.exec_driver_sql("ALTER TABLE IF EXISTS promotion_raw ADD COLUMN IF NOT EXISTS platform VARCHAR DEFAULT '拼多多';")
+            conn.exec_driver_sql("ALTER TABLE IF EXISTS cashflow_raw ADD COLUMN IF NOT EXISTS platform VARCHAR DEFAULT '拼多多';")
+            conn.exec_driver_sql("ALTER TABLE IF EXISTS cashflow_raw ADD COLUMN IF NOT EXISTS store_name VARCHAR;")
+            conn.exec_driver_sql("ALTER TABLE IF EXISTS cashflow_raw ADD COLUMN IF NOT EXISTS cashflow_time VARCHAR;")
+            conn.exec_driver_sql("ALTER TABLE IF EXISTS cashflow_raw ADD COLUMN IF NOT EXISTS cashflow_date VARCHAR;")
+            conn.exec_driver_sql("ALTER TABLE IF EXISTS cashflow_raw ADD COLUMN IF NOT EXISTS flow_type VARCHAR;")
+            conn.exec_driver_sql("ALTER TABLE IF EXISTS cashflow_raw ADD COLUMN IF NOT EXISTS transaction_amount FLOAT;")
+            conn.exec_driver_sql("ALTER TABLE IF EXISTS cashflow_raw ADD COLUMN IF NOT EXISTS transaction_summary VARCHAR;")
+            conn.exec_driver_sql("ALTER TABLE IF EXISTS cashflow_raw ADD COLUMN IF NOT EXISTS raw_json VARCHAR;")
+            conn.exec_driver_sql("ALTER TABLE IF EXISTS cashflow_raw ADD COLUMN IF NOT EXISTS batch_id VARCHAR;")
+            conn.exec_driver_sql("ALTER TABLE IF EXISTS cashflow_raw ADD COLUMN IF NOT EXISTS uploaded_at VARCHAR;")
+            return
+
+        if eng.dialect.name == "sqlite":
+            def _sqlite_add_column_if_missing(table_name: str, column_name: str, column_sql: str):
+                exists = conn.exec_driver_sql(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                    (table_name,),
+                ).fetchone()
+                if not exists:
+                    return
+                cols = {row[1] for row in conn.exec_driver_sql(f"PRAGMA table_info({table_name})").fetchall()}
+                if column_name not in cols:
+                    conn.exec_driver_sql(f"ALTER TABLE {table_name} ADD COLUMN {column_sql}")
+
+            _sqlite_add_column_if_missing("orders_raw", "platform", "platform VARCHAR DEFAULT '拼多多'")
+            _sqlite_add_column_if_missing("promotion_raw", "platform", "platform VARCHAR DEFAULT '拼多多'")
+            _sqlite_add_column_if_missing("cashflow_raw", "platform", "platform VARCHAR DEFAULT '拼多多'")
+            _sqlite_add_column_if_missing("cashflow_raw", "store_name", "store_name VARCHAR")
+            _sqlite_add_column_if_missing("cashflow_raw", "cashflow_time", "cashflow_time VARCHAR")
+            _sqlite_add_column_if_missing("cashflow_raw", "cashflow_date", "cashflow_date VARCHAR")
+            _sqlite_add_column_if_missing("cashflow_raw", "flow_type", "flow_type VARCHAR")
+            _sqlite_add_column_if_missing("cashflow_raw", "transaction_amount", "transaction_amount FLOAT")
+            _sqlite_add_column_if_missing("cashflow_raw", "transaction_summary", "transaction_summary VARCHAR")
+            _sqlite_add_column_if_missing("cashflow_raw", "raw_json", "raw_json VARCHAR")
+            _sqlite_add_column_if_missing("cashflow_raw", "batch_id", "batch_id VARCHAR")
+            _sqlite_add_column_if_missing("cashflow_raw", "uploaded_at", "uploaded_at VARCHAR")
+
 def _col(df, names): return next((n for n in names if n in df.columns), None)
 def _text(v): return "" if pd.isna(v) else str(v).strip()
 def _date(v):
