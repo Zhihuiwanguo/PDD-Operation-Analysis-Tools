@@ -120,7 +120,11 @@ def _render_uploads() -> tuple[dict, dict]:
                     elif key == "promotion":
                         st.write(save_promotion_history(df, fname))
                     else:
-                        st.write(save_master_table_history(key, df, fname))
+                        result = save_master_table_history(key, df, fname)
+                        st.write(result)
+                        duplicates_removed = int(result.get("duplicates_removed", 0) or 0)
+                        if duplicates_removed > 0:
+                            st.warning(f"检测到重复映射记录，已自动按 row_key 去重并保留最后一条：{duplicates_removed} 条。")
                 st.success("历史数据保存完成")
             except Exception as e:
                 st.error(

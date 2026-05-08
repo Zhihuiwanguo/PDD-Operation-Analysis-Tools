@@ -335,20 +335,41 @@ def save_master_table_history(table_key: str, df: pd.DataFrame, file_name: str |
     init_history_db()
     table, key_cols = mapping[table_key]
     batch_id = datetime.utcnow().strftime(f"%Y%m%d_%H%M%S_{table_key}")
+    uploaded_at = datetime.utcnow().isoformat()
+    records_by_key: dict[str, dict] = {}
+    for _, row in df.fillna("").iterrows():
+        raw = row.to_dict()
+        if len(key_cols) == 1 and key_cols[0] in raw and _text(raw.get(key_cols[0])):
+            row_key = _text(raw.get(key_cols[0]))
+        elif all(_text(raw.get(c)) for c in key_cols):
+            row_key = "|".join(_text(raw.get(c)) for c in key_cols)
+        else:
+            row_key = _hash_row(raw)
+        records_by_key[row_key] = {
+            "row_key": row_key,
+            "raw_json": json.dumps(raw, ensure_ascii=False, default=str),
+            "uploaded_at": uploaded_at,
+        }
+
+    duplicate_count = len(df) - len(records_by_key)
+    records = list(records_by_key.values())
+
     with _engine().begin() as conn:
         conn.execute(delete(table))
-        for _, row in df.fillna("").iterrows():
-            raw = row.to_dict()
-            if len(key_cols) == 1 and key_cols[0] in raw and _text(raw.get(key_cols[0])):
-                row_key = _text(raw.get(key_cols[0]))
-            elif all(_text(raw.get(c)) for c in key_cols):
-                row_key = "|".join(_text(raw.get(c)) for c in key_cols)
-            else:
-                row_key = _hash_row(raw)
-            conn.execute(insert(table).values(row_key=row_key, raw_json=json.dumps(raw, ensure_ascii=False, default=str), uploaded_at=datetime.utcnow().isoformat()))
+        if records:
+            conn.execute(insert(table), records)
         file_hash = hashlib.md5(pd.util.hash_pandas_object(df.astype(str), index=True).values.tobytes()).hexdigest() if not df.empty else ""
         _insert_batch(conn, batch_id, table_key, file_name, len(df), "", "", file_hash)
-    return {"batch_id": batch_id, "inserted": len(df), "updated": 0, "skipped": 0, "date_min": "", "date_max": "", "row_count": len(df)}
+    return {
+        "batch_id": batch_id,
+        "inserted": len(records),
+        "updated": 0,
+        "skipped": 0,
+        "date_min": "",
+        "date_max": "",
+        "row_count": len(records),
+        "duplicates_removed": duplicate_count,
+    }
 
 
 def _load_raw_json_df(conn, table):
