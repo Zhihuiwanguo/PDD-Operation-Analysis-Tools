@@ -6,7 +6,13 @@ from dataclasses import dataclass
 
 import pandas as pd
 
-from app.constants import DATE_CANDIDATE_COLUMNS, PROMOTION_SPEND_COLUMN_ALIASES, UPLOAD_SPECS
+from app.constants import (
+    DATE_CANDIDATE_COLUMNS,
+    PROMOTION_DATE_COLUMN_ALIASES,
+    PROMOTION_GOODS_ID_COLUMN_ALIASES,
+    PROMOTION_SPEND_COLUMN_ALIASES,
+    UPLOAD_SPECS,
+)
 from app.utils import parse_datetime_range
 
 
@@ -16,6 +22,14 @@ def _missing_with_alias(key: str, df: pd.DataFrame, required_cols: tuple[str, ..
         if key == "orders" and col == "商品id":
             if ("商品id" not in df.columns) and ("商品ID" not in df.columns):
                 missing.append("商品id/商品ID")
+            continue
+        if key == "promotion" and col == "日期":
+            if not any(alias in df.columns for alias in PROMOTION_DATE_COLUMN_ALIASES):
+                missing.append("日期/时间/统计日期/推广日期")
+            continue
+        if key == "promotion" and col == "商品ID":
+            if not any(alias in df.columns for alias in PROMOTION_GOODS_ID_COLUMN_ALIASES):
+                missing.append("商品ID/商品id/商品 Id/goods_id")
             continue
         if key == "promotion" and col == "实际成交花费(元)":
             if not any(alias in df.columns for alias in PROMOTION_SPEND_COLUMN_ALIASES):

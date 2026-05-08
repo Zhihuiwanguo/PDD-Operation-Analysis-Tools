@@ -44,30 +44,34 @@ UPLOAD_SPECS: tuple[UploadSpec, ...] = (
     ),
     UploadSpec(
         key="promotion",
-        label="拼多多推广汇总表",
+        label="每日商品ID推广数据上传",
         required_columns=("日期", "商品ID", "实际成交花费(元)"),
     ),
     UploadSpec(
         key="cashflow",
-        label="推广账户每日流水表",
-        required_columns=("时间", "交易金额", "流水类型"),
+        label="店铺每日推广费流水上传",
+        required_columns=("时间", "流水类型", "交易金额", "交易摘要"),
     ),
 )
 
 UPLOAD_SPEC_MAP = {spec.key: spec for spec in UPLOAD_SPECS}
 
 PROMOTION_SPEND_COLUMN_ALIASES: tuple[str, ...] = (
-    "成交花费",
-    "成交花费(元)",
     "实际成交花费(元)",
     "实际成交花费",
-    "推广费",
+    "成交花费",
+    "花费",
+    "推广花费",
+    "消耗",
 )
+
+PROMOTION_DATE_COLUMN_ALIASES: tuple[str, ...] = ("日期", "时间", "统计日期", "推广日期")
+PROMOTION_GOODS_ID_COLUMN_ALIASES: tuple[str, ...] = ("商品ID", "商品id", "商品 Id", "goods_id")
 
 
 DATE_CANDIDATE_COLUMNS: dict[str, tuple[str, ...]] = {
     "orders": ("订单成交时间", "支付时间"),
-    "promotion": ("日期",),
+    "promotion": PROMOTION_DATE_COLUMN_ALIASES,
     "cashflow": ("时间", "日期"),
 }
 

@@ -957,6 +957,11 @@ def _prepare_promotion_base(promo_df: pd.DataFrame) -> pd.DataFrame:
     out = promo_df.copy()
 
     if "商品ID" not in out.columns:
+        for alias in ["商品id", "商品 Id", "goods_id"]:
+            if alias in out.columns:
+                out = out.rename(columns={alias: "商品ID"})
+                break
+    if "商品ID" not in out.columns:
         out["商品ID"] = ""
     out["商品ID"] = _normalize_goods_id_series(out["商品ID"])
 
