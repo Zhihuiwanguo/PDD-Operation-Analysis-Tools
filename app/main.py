@@ -97,16 +97,25 @@ def _render_uploads() -> tuple[dict, dict]:
             st.warning("当前未配置 DATABASE_URL，历史数据库将使用临时 SQLite，仅适合测试，Streamlit 重启后可能丢失。长期使用请接 Supabase/PostgreSQL。")
 
         upload_map = {}
-        label_map = {
+
+        st.markdown("### 历史数据库数据上传")
+        st.markdown("#### 经营主数据")
+        for key, label in {
             "orders": "订单明细上传",
             "sales_spec_mapping": "商品规格映射上传",
             "link_spec_mapping": "店铺链接规格映射上传",
-            "promotion": "每日商品ID推广数据上传",
-        }
-        for key, label in label_map.items():
+        }.items():
             file = st.file_uploader(label, type=["csv", "xlsx", "xls"], key=f"upload_hist_{key}")
             if file is not None:
                 upload_map[key] = (file.name, load_table(file, file.name, key=key))
+
+        st.markdown("#### 推广数据")
+        promo_file = st.file_uploader("每日商品ID推广数据上传", type=["csv", "xlsx", "xls"], key="upload_hist_promotion")
+        st.caption("用于商品ID、链接、产品维度ROI分析。")
+        if promo_file is not None:
+            upload_map["promotion"] = (promo_file.name, load_table(promo_file, promo_file.name, key="promotion"))
+
+        render_pdd_promo_fund_flow_upload()
 
         if st.button("保存上传数据到历史数据库"):
             try:
@@ -131,9 +140,6 @@ def _render_uploads() -> tuple[dict, dict]:
                     f"错误信息：{e}"
                 )
 
-
-        st.markdown("---")
-        render_pdd_promo_fund_flow_upload()
 
         try:
             stats = get_history_stats()
@@ -247,8 +253,8 @@ def summarize_daily_pdd_promo_cost(promo_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def render_pdd_promo_fund_flow_upload() -> None:
-    st.markdown("#### 店铺每日推广费流水上传")
-    st.caption("用于店铺级每日推广费核对，不用于商品ID级ROI。")
+    st.markdown("店铺每日推广费流水上传")
+    st.caption("用于店铺级每日推广费核对，不用于商品ID ROI。")
 
     uploaded_file = st.file_uploader(
         "上传店铺推广费流水明细（.xls / .xlsx）",
