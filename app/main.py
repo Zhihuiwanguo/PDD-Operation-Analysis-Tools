@@ -75,7 +75,7 @@ def _render_uploads() -> tuple[dict, dict]:
     st.header("A/B. 数据上传与校验")
     mode = "单次上传分析"
     st.info(f"当前为{mode}")
-    st.warning("历史数据库分析模式维护中，当前请使用单次上传分析。")
+    st.warning("旧历史数据库分析模式已停用，请使用单次上传分析或历史数据分析 V2。")
 
     tables = {}
     meta = {"mode": mode, "history_range": None}
@@ -317,36 +317,11 @@ def main() -> None:
         )
         st.sidebar.success("经营配置已保存")
 
-    # 历史分析：只加载到 loaded_history_ctx，不默认覆盖当前上传数据
-    if st.button("加载最近一次分析"):
-        latest = load_latest_analysis_db()
-        if latest is None:
-            st.warning("未找到历史分析结果。")
-        else:
-            st.session_state["loaded_history_ctx"] = latest
-            st.success("已加载最近一次历史分析。")
+    st.caption("旧历史数据库分析入口已停用。")
+    st.info("旧历史数据库分析模式已停用，请使用单次上传分析或历史数据分析 V2。")
 
-    use_loaded_history = False
-    if "loaded_history_ctx" in st.session_state:
-        use_loaded_history = st.checkbox("使用已加载的历史分析结果", value=False)
-
-        if st.button("清除历史缓存"):
-            st.session_state.pop("loaded_history_ctx", None)
-            st.success("已清除历史缓存，将使用当前上传数据。")
-            st.rerun()
-
-    if st.button("保存本次分析"):
-        save_raw_data(computed_ctx["orders_enriched"], computed_ctx.get("promotion_df"))
-        save_analysis_result(computed_ctx)
-        save_analysis(computed_ctx)
-        st.success("本次分析已保存。")
-
-    # 默认永远使用当前上传/当前筛选计算结果
-    # 只有用户明确勾选“使用已加载的历史分析结果”时，才使用历史 ctx
-    if use_loaded_history and "loaded_history_ctx" in st.session_state:
-        ctx = st.session_state["loaded_history_ctx"]
-    else:
-        ctx = computed_ctx
+    # 默认仅使用当前上传/当前筛选计算结果
+    ctx = computed_ctx
 
     st.success("分析完成。")
     if source_meta.get("mode") == "历史数据库分析":
