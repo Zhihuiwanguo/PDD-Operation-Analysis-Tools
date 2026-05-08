@@ -52,6 +52,7 @@ from app.pages import (
 )
 from app.utils import to_numeric
 from app.validators import validate_all
+from app.validators import detect_promotion_columns
 from app.upload_components import render_common_upload_inputs
 
 
@@ -67,6 +68,11 @@ except Exception:
 def _prepare_tables(raw_tables: dict) -> dict:
     out = {}
     for key, df in raw_tables.items():
+        if key == "promotion":
+            promo_fields = detect_promotion_columns(df)
+            found_spend_col = promo_fields.get("spend")
+            if found_spend_col and found_spend_col != "实际成交花费(元)":
+                df["实际成交花费(元)"] = df[found_spend_col]
         out[key] = to_numeric(df, NUMERIC_COLUMNS.get(key, tuple()))
     return out
 

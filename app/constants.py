@@ -60,9 +60,12 @@ PROMOTION_SPEND_COLUMN_ALIASES: tuple[str, ...] = (
     "实际成交花费(元)",
     "实际成交花费",
     "成交花费",
+    "成交花费(元)",
     "花费",
     "推广花费",
     "消耗",
+    "推广消耗",
+    "实际消耗",
 )
 
 PROMOTION_DATE_COLUMN_ALIASES: tuple[str, ...] = ("日期", "时间", "统计日期", "推广日期")

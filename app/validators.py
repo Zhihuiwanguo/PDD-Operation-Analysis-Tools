@@ -16,7 +16,36 @@ from app.constants import (
 from app.utils import parse_datetime_range
 
 
+def normalize_col_name(col: object) -> str:
+    s = str(col or "")
+    s = s.strip()
+    s = s.replace("\n", "")
+    s = s.replace("\r", "")
+    s = s.replace("\t", "")
+    s = s.replace(" ", "")
+    s = s.replace("（", "(").replace("）", ")")
+    return s
+
+
+def detect_promotion_columns(df: pd.DataFrame) -> dict[str, str | None]:
+    normalized_columns = {normalize_col_name(c): c for c in df.columns}
+
+    def _find_alias(aliases: tuple[str, ...]) -> str | None:
+        for alias in aliases:
+            matched = normalized_columns.get(normalize_col_name(alias))
+            if matched is not None:
+                return matched
+        return None
+
+    return {
+        "date": _find_alias(PROMOTION_DATE_COLUMN_ALIASES),
+        "goods_id": _find_alias(PROMOTION_GOODS_ID_COLUMN_ALIASES),
+        "spend": _find_alias(PROMOTION_SPEND_COLUMN_ALIASES),
+    }
+
+
 def _missing_with_alias(key: str, df: pd.DataFrame, required_cols: tuple[str, ...]) -> list[str]:
+    promotion_fields = detect_promotion_columns(df) if key == "promotion" else {}
     missing: list[str] = []
     for col in required_cols:
         if key == "orders" and col == "商品id":
@@ -24,16 +53,16 @@ def _missing_with_alias(key: str, df: pd.DataFrame, required_cols: tuple[str, ..
                 missing.append("商品id/商品ID")
             continue
         if key == "promotion" and col == "日期":
-            if not any(alias in df.columns for alias in PROMOTION_DATE_COLUMN_ALIASES):
+            if promotion_fields.get("date") is None:
                 missing.append("日期/时间/统计日期/推广日期")
             continue
         if key == "promotion" and col == "商品ID":
-            if not any(alias in df.columns for alias in PROMOTION_GOODS_ID_COLUMN_ALIASES):
+            if promotion_fields.get("goods_id") is None:
                 missing.append("商品ID/商品id/商品 Id/goods_id")
             continue
         if key == "promotion" and col == "实际成交花费(元)":
-            if not any(alias in df.columns for alias in PROMOTION_SPEND_COLUMN_ALIASES):
-                missing.append("推广费字段(成交花费/成交花费(元)/实际成交花费(元)/实际成交花费/推广费)")
+            if promotion_fields.get("spend") is None:
+                missing.append("推广费字段(成交花费/成交花费(元)/实际成交花费(元)/实际成交花费/推广费/花费/推广花费/消耗/推广消耗/实际消耗)")
             continue
         if col not in df.columns:
             missing.append(col)
