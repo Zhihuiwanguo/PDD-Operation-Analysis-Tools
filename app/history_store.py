@@ -80,6 +80,18 @@ promotion_raw = Table(
 product_master_current = Table("product_master_current", metadata, Column("id", Integer, primary_key=True, autoincrement=True), Column("row_key", String, unique=True), Column("raw_json", String), Column("uploaded_at", String))
 sales_spec_mapping_current = Table("sales_spec_mapping_current", metadata, Column("id", Integer, primary_key=True, autoincrement=True), Column("row_key", String, unique=True), Column("raw_json", String), Column("uploaded_at", String))
 link_spec_mapping_current = Table("link_spec_mapping_current", metadata, Column("id", Integer, primary_key=True, autoincrement=True), Column("row_key", String, unique=True), Column("raw_json", String), Column("uploaded_at", String))
+cashflow_raw = Table(
+    "cashflow_raw",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("cashflow_key", String, unique=True),
+    Column("cashflow_date", String),
+    Column("store_name", String),
+    Column("amount", Float),
+    Column("raw_json", String),
+    Column("batch_id", String),
+    Column("uploaded_at", String),
+)
 
 
 def get_database_url() -> str:
@@ -372,6 +384,61 @@ def save_master_table_history(table_key: str, df: pd.DataFrame, file_name: str |
     }
 
 
+def save_cashflow_history(cashflow_df: pd.DataFrame, file_name: str | None = None) -> dict:
+    init_history_db()
+    batch_id = datetime.utcnow().strftime("%Y%m%d_%H%M%S_cashflow")
+    date_col = _col(cashflow_df, ("日期",))
+    amount_col = _col(cashflow_df, ("店铺每日推广费",))
+    all_dates = []
+    payloads: list[dict] = []
+    for idx, row in cashflow_df.fillna("").iterrows():
+        raw = row.to_dict()
+        cashflow_date = _date(raw.get(date_col)) if date_col else ""
+        if cashflow_date:
+            all_dates.append(cashflow_date)
+        store_name = _text(raw.get("店铺名称"))
+        amount = _num(raw.get(amount_col)) if amount_col else None
+        cashflow_key = f"{cashflow_date}|{store_name}|{idx}|{_hash_row(raw)[:12]}"
+        payloads.append(
+            {
+                "cashflow_key": cashflow_key,
+                "cashflow_date": cashflow_date,
+                "store_name": store_name,
+                "amount": amount,
+                "raw_json": json.dumps(raw, ensure_ascii=False, default=str),
+                "batch_id": batch_id,
+                "uploaded_at": datetime.utcnow().isoformat(),
+            }
+        )
+
+    eng = _engine()
+    with eng.begin() as conn:
+        dialect = eng.dialect.name
+        if dialect == "postgresql":
+            stmt = pg_insert(cashflow_raw).values(payloads)
+        elif dialect == "sqlite":
+            stmt = sqlite_insert(cashflow_raw).values(payloads)
+        else:
+            raise RuntimeError(f"unsupported db dialect: {dialect}")
+        if payloads:
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["cashflow_key"],
+                set_={
+                    "cashflow_date": stmt.excluded.cashflow_date,
+                    "store_name": stmt.excluded.store_name,
+                    "amount": stmt.excluded.amount,
+                    "raw_json": stmt.excluded.raw_json,
+                    "batch_id": stmt.excluded.batch_id,
+                    "uploaded_at": stmt.excluded.uploaded_at,
+                },
+            )
+            conn.execute(stmt)
+        file_hash = hashlib.md5(pd.util.hash_pandas_object(cashflow_df.astype(str), index=True).values.tobytes()).hexdigest() if not cashflow_df.empty else ""
+        dmin, dmax = (min(all_dates), max(all_dates)) if all_dates else ("", "")
+        _insert_batch(conn, batch_id, "cashflow", file_name, len(cashflow_df), dmin, dmax, file_hash)
+    return {"batch_id": batch_id, "inserted": len(payloads), "updated": 0, "skipped": 0, "date_min": dmin, "date_max": dmax, "row_count": len(cashflow_df)}
+
+
 def _load_raw_json_df(conn, table):
     rows = conn.execute(select(table.c.raw_json)).fetchall()
     if not rows:
@@ -387,6 +454,7 @@ def load_history_tables(date_start=None, date_end=None) -> dict[str, pd.DataFram
         pm = _load_raw_json_df(conn, product_master_current)
         sm = _load_raw_json_df(conn, sales_spec_mapping_current)
         lm = _load_raw_json_df(conn, link_spec_mapping_current)
+        cf = _load_raw_json_df(conn, cashflow_raw)
 
     if not od.empty:
         order_date = pd.to_datetime(od.get("订单成交时间"), errors="coerce")
@@ -410,7 +478,7 @@ def load_history_tables(date_start=None, date_end=None) -> dict[str, pd.DataFram
             if date_end is not None:
                 pdm = pdm[ds <= pd.to_datetime(date_end)]
 
-    return {"orders": od if od is not None else pd.DataFrame(), "promotion": pdm if pdm is not None else pd.DataFrame(), "product_master": pm if pm is not None else pd.DataFrame(), "sales_spec_mapping": sm if sm is not None else pd.DataFrame(), "link_spec_mapping": lm if lm is not None else pd.DataFrame(), "cashflow": pd.DataFrame()}
+    return {"orders": od if od is not None else pd.DataFrame(), "promotion": pdm if pdm is not None else pd.DataFrame(), "product_master": pm if pm is not None else pd.DataFrame(), "sales_spec_mapping": sm if sm is not None else pd.DataFrame(), "link_spec_mapping": lm if lm is not None else pd.DataFrame(), "cashflow": cf if cf is not None else pd.DataFrame()}
 
 
 def list_upload_batches(limit=50) -> pd.DataFrame:

@@ -30,6 +30,7 @@ from app.history_store import (
     init_history_db,
     list_upload_batches,
     load_history_tables,
+    save_cashflow_history,
     save_master_table_history,
     save_orders_history,
     save_promotion_history,
@@ -69,6 +70,55 @@ def _prepare_tables(raw_tables: dict) -> dict:
     return out
 
 
+
+
+def render_upload_inputs(mode: str) -> tuple[dict, dict]:
+    """渲染统一上传入口。
+
+    Returns:
+        loaded_tables: 用于当前分析流程的表（单次模式会即时加载）。
+        upload_payload: 历史模式下用于保存入库的上传原始数据。
+    """
+    loaded_tables: dict = {}
+    upload_payload: dict = {}
+
+    st.markdown("#### 经营主数据")
+    for spec in [
+        next(x for x in UPLOAD_SPECS if x.key == "orders"),
+        next(x for x in UPLOAD_SPECS if x.key == "product_master"),
+        next(x for x in UPLOAD_SPECS if x.key == "sales_spec_mapping"),
+        next(x for x in UPLOAD_SPECS if x.key == "link_spec_mapping"),
+    ]:
+        file = st.file_uploader(spec.label, type=["csv", "xlsx", "xls"], key=f"upload_{mode}_{spec.key}")
+        if file is not None:
+            df = load_table(file, file.name, key=spec.key)
+            loaded_tables[spec.key] = df
+            upload_payload[spec.key] = (file.name, df)
+
+    st.markdown("#### 推广数据")
+    promo_spec = next(x for x in UPLOAD_SPECS if x.key == "promotion")
+    promo_file = st.file_uploader(promo_spec.label, type=["csv", "xlsx", "xls"], key=f"upload_{mode}_promotion")
+    st.caption("用于商品ID、链接、产品维度ROI分析。")
+    if promo_file is not None:
+        promo_df = load_table(promo_file, promo_file.name, key="promotion")
+        loaded_tables["promotion"] = promo_df
+        upload_payload["promotion"] = (promo_file.name, promo_df)
+
+    st.markdown("店铺每日推广费流水上传")
+    st.caption("用于店铺级每日推广费核对，不用于商品ID ROI。")
+    flow_file = st.file_uploader(
+        "店铺每日推广费流水上传",
+        type=["xls", "xlsx"],
+        key=f"upload_{mode}_cashflow",
+    )
+    if flow_file is not None:
+        raw_df = read_excel_compat(flow_file)
+        promo_df = clean_pdd_promo_fund_flow(raw_df)
+        cashflow_df = summarize_daily_pdd_promo_cost(promo_df)
+        loaded_tables["cashflow"] = cashflow_df
+        upload_payload["cashflow"] = (flow_file.name, cashflow_df)
+
+    return loaded_tables, upload_payload
 def _render_uploads() -> tuple[dict, dict]:
     st.header("A/B. 数据上传与校验")
     mode = st.radio("数据来源模式", ["单次上传分析", "历史数据库分析"], index=0, horizontal=True)
@@ -83,10 +133,8 @@ def _render_uploads() -> tuple[dict, dict]:
             st.info("当前使用 sample_data 样例文件。")
             tables = load_sample_tables(CONFIG.sample_data_dir)
         else:
-            for spec in UPLOAD_SPECS:
-                file = st.file_uploader(f"上传{spec.label}", type=["csv", "xlsx", "xls"], key=f"upload_single_{spec.key}")
-                if file is not None:
-                    tables[spec.key] = load_table(file, file.name, key=spec.key)
+            st.markdown("### 单次上传分析数据上传")
+            tables, _ = render_upload_inputs("single")
 
         if not tables:
             st.warning("请上传全部必需文件后再分析。")
@@ -96,44 +144,33 @@ def _render_uploads() -> tuple[dict, dict]:
         if "sqlite" in db_url or "/tmp/aland_history" in db_url:
             st.warning("当前未配置 DATABASE_URL，历史数据库将使用临时 SQLite，仅适合测试，Streamlit 重启后可能丢失。长期使用请接 Supabase/PostgreSQL。")
 
-        upload_map = {}
-
         st.markdown("### 历史数据库数据上传")
-        st.markdown("#### 经营主数据")
-        for key, label in {
-            "orders": "订单明细上传",
-            "sales_spec_mapping": "商品规格映射上传",
-            "link_spec_mapping": "店铺链接规格映射上传",
-        }.items():
-            file = st.file_uploader(label, type=["csv", "xlsx", "xls"], key=f"upload_hist_{key}")
-            if file is not None:
-                upload_map[key] = (file.name, load_table(file, file.name, key=key))
-
-        st.markdown("#### 推广数据")
-        promo_file = st.file_uploader("每日商品ID推广数据上传", type=["csv", "xlsx", "xls"], key="upload_hist_promotion")
-        st.caption("用于商品ID、链接、产品维度ROI分析。")
-        if promo_file is not None:
-            upload_map["promotion"] = (promo_file.name, load_table(promo_file, promo_file.name, key="promotion"))
-
-        render_pdd_promo_fund_flow_upload()
+        _, upload_map = render_upload_inputs("history")
 
         if st.button("保存上传数据到历史数据库"):
             try:
-                for key, item in upload_map.items():
-                    fname, df = item
-                    if key == "orders":
-                        if len(df) > 5000:
-                            st.info("正在批量写入历史数据库，数据量较大，请稍候。系统会自动去重，不会重复累计销售额。")
-                        st.write(save_orders_history(df, fname))
-                    elif key == "promotion":
-                        st.write(save_promotion_history(df, fname))
-                    else:
-                        result = save_master_table_history(key, df, fname)
-                        st.write(result)
-                        duplicates_removed = int(result.get("duplicates_removed", 0) or 0)
-                        if duplicates_removed > 0:
-                            st.warning(f"检测到重复映射记录，已自动按 row_key 去重并保留最后一条：{duplicates_removed} 条。")
-                st.success("历史数据保存完成")
+                required_save_keys = ["orders", "product_master", "sales_spec_mapping", "link_spec_mapping", "promotion", "cashflow"]
+                missing_uploads = [k for k in required_save_keys if k not in upload_map]
+                if missing_uploads:
+                    st.error("请先上传全部 6 个必需数据表后再保存。")
+                else:
+                    for key in required_save_keys:
+                        fname, df = upload_map[key]
+                        if key == "orders":
+                            if len(df) > 5000:
+                                st.info("正在批量写入历史数据库，数据量较大，请稍候。系统会自动去重，不会重复累计销售额。")
+                            st.write(save_orders_history(df, fname))
+                        elif key == "promotion":
+                            st.write(save_promotion_history(df, fname))
+                        elif key == "cashflow":
+                            st.write(save_cashflow_history(df, fname))
+                        else:
+                            result = save_master_table_history(key, df, fname)
+                            st.write(result)
+                            duplicates_removed = int(result.get("duplicates_removed", 0) or 0)
+                            if duplicates_removed > 0:
+                                st.warning(f"检测到重复映射记录，已自动按 row_key 去重并保留最后一条：{duplicates_removed} 条。")
+                    st.success("历史数据保存完成")
             except Exception as e:
                 st.error(
                     "历史数据库操作失败：\n请检查是否已配置 DATABASE_URL，或先使用“单次上传分析”模式。\n"
@@ -251,34 +288,6 @@ def summarize_daily_pdd_promo_cost(promo_df: pd.DataFrame) -> pd.DataFrame:
         .rename(columns={"交易金额": "店铺每日推广费"})
     )
 
-
-def render_pdd_promo_fund_flow_upload() -> None:
-    st.markdown("店铺每日推广费流水上传")
-    st.caption("用于店铺级每日推广费核对，不用于商品ID ROI。")
-
-    uploaded_file = st.file_uploader(
-        "上传店铺推广费流水明细（.xls / .xlsx）",
-        type=["xls", "xlsx"],
-        key="pdd_promo_fund_flow_upload",
-    )
-
-    if uploaded_file is None:
-        st.info("请上传拼多多后台导出的流水明细表（仅上传后才校验字段）。")
-        return
-
-    try:
-        raw_df = read_excel_compat(uploaded_file)
-        promo_df = clean_pdd_promo_fund_flow(raw_df)
-        daily_df = summarize_daily_pdd_promo_cost(promo_df)
-
-        st.success("店铺每日推广费流水读取成功")
-        st.write("店铺每日推广费流水明细")
-        st.dataframe(promo_df, use_container_width=True)
-
-        st.write("店铺每日推广费汇总")
-        st.dataframe(daily_df, use_container_width=True)
-    except Exception as e:
-        st.error(f"拼多多推广资金流水读取失败：{e}")
 
 def _normalize_filter_selection(selected, all_options):
     """
