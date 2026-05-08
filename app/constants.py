@@ -15,22 +15,22 @@ class UploadSpec:
 UPLOAD_SPECS: tuple[UploadSpec, ...] = (
     UploadSpec(
         key="product_master",
-        label="标准产品主档表",
+        label="标准产品主档上传",
         required_columns=("标准产品ID", "标准产品名称", "单个产品成本"),
     ),
     UploadSpec(
         key="sales_spec_mapping",
-        label="销售规格映射表",
+        label="商品规格映射上传",
         required_columns=("销售规格ID", "标准产品ID", "产品总成本", "快递费"),
     ),
     UploadSpec(
         key="link_spec_mapping",
-        label="店铺链接规格映射表",
+        label="店铺链接规格映射上传",
         required_columns=("商品ID", "商品规格", "销售规格ID", "销售规格名称"),
     ),
     UploadSpec(
         key="orders",
-        label="拼多多原始订单表",
+        label="订单明细上传",
         required_columns=(
             "订单号",
             "订单状态",

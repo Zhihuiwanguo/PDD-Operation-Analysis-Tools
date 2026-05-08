@@ -8,500 +8,147 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
-from sqlalchemy import (
-    Column,
-    Float,
-    Integer,
-    MetaData,
-    String,
-    Table,
-    create_engine,
-    delete,
-    func,
-    insert,
-    select,
-)
+from sqlalchemy import Column, Float, Integer, MetaData, String, Table, create_engine, delete, func, insert, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-from sqlalchemy.exc import OperationalError
-
-
 metadata = MetaData()
-
-upload_batches = Table(
-    "upload_batches",
-    metadata,
-    Column("id", Integer, primary_key=True, autoincrement=True),
-    Column("batch_id", String),
-    Column("table_type", String),
-    Column("file_name", String),
-    Column("row_count", Integer),
-    Column("date_min", String),
-    Column("date_max", String),
-    Column("file_hash", String),
-    Column("uploaded_at", String),
-)
-
-orders_raw = Table(
-    "orders_raw",
-    metadata,
-    Column("id", Integer, primary_key=True, autoincrement=True),
-    Column("order_key", String, unique=True),
-    Column("store_name", String),
-    Column("goods_id", String),
-    Column("goods_name", String),
-    Column("goods_spec", String),
-    Column("order_status", String),
-    Column("after_sale_status", String),
-    Column("order_date", String),
-    Column("pay_date", String),
-    Column("merchant_receivable", Float),
-    Column("raw_json", String),
-    Column("batch_id", String),
-    Column("uploaded_at", String),
-)
-
-promotion_raw = Table(
-    "promotion_raw",
-    metadata,
-    Column("id", Integer, primary_key=True, autoincrement=True),
-    Column("promo_key", String, unique=True),
-    Column("store_name", String),
-    Column("goods_id", String),
-    Column("promo_date", String),
-    Column("spend", Float),
-    Column("transaction_amount", Float),
-    Column("raw_json", String),
-    Column("batch_id", String),
-    Column("uploaded_at", String),
-)
-
-product_master_current = Table("product_master_current", metadata, Column("id", Integer, primary_key=True, autoincrement=True), Column("row_key", String, unique=True), Column("raw_json", String), Column("uploaded_at", String))
-sales_spec_mapping_current = Table("sales_spec_mapping_current", metadata, Column("id", Integer, primary_key=True, autoincrement=True), Column("row_key", String, unique=True), Column("raw_json", String), Column("uploaded_at", String))
-link_spec_mapping_current = Table("link_spec_mapping_current", metadata, Column("id", Integer, primary_key=True, autoincrement=True), Column("row_key", String, unique=True), Column("raw_json", String), Column("uploaded_at", String))
-cashflow_raw = Table(
-    "cashflow_raw",
-    metadata,
-    Column("id", Integer, primary_key=True, autoincrement=True),
-    Column("cashflow_key", String, unique=True),
-    Column("cashflow_date", String),
-    Column("store_name", String),
-    Column("amount", Float),
-    Column("raw_json", String),
-    Column("batch_id", String),
-    Column("uploaded_at", String),
-)
-
+# tables definitions
+upload_batches = Table("upload_batches", metadata, Column("id", Integer, primary_key=True), Column("batch_id", String), Column("table_type", String), Column("file_name", String), Column("row_count", Integer), Column("date_min", String), Column("date_max", String), Column("file_hash", String), Column("uploaded_at", String))
+orders_raw = Table("orders_raw", metadata, Column("id", Integer, primary_key=True), Column("order_key", String, unique=True), Column("platform", String), Column("store_name", String), Column("goods_id", String), Column("order_date", String), Column("pay_date", String), Column("raw_json", String), Column("batch_id", String), Column("uploaded_at", String))
+promotion_raw = Table("promotion_raw", metadata, Column("id", Integer, primary_key=True), Column("promo_key", String, unique=True), Column("platform", String), Column("store_name", String), Column("goods_id", String), Column("promo_date", String), Column("spend", Float), Column("raw_json", String), Column("batch_id", String), Column("uploaded_at", String))
+product_master_current = Table("product_master_current", metadata, Column("id", Integer, primary_key=True), Column("row_key", String, unique=True), Column("raw_json", String), Column("uploaded_at", String))
+sales_spec_mapping_current = Table("sales_spec_mapping_current", metadata, Column("id", Integer, primary_key=True), Column("row_key", String, unique=True), Column("raw_json", String), Column("uploaded_at", String))
+link_spec_mapping_current = Table("link_spec_mapping_current", metadata, Column("id", Integer, primary_key=True), Column("row_key", String, unique=True), Column("raw_json", String), Column("uploaded_at", String))
+cashflow_raw = Table("cashflow_raw", metadata, Column("id", Integer, primary_key=True), Column("cashflow_key", String, unique=True), Column("platform", String), Column("store_name", String), Column("cashflow_time", String), Column("cashflow_date", String), Column("flow_type", String), Column("transaction_amount", Float), Column("transaction_summary", String), Column("raw_json", String), Column("batch_id", String), Column("uploaded_at", String))
 
 def get_database_url() -> str:
+    secret = None
     try:
-        secret_url = st.secrets.get("DATABASE_URL")
-        if secret_url:
-            return str(secret_url)
+        secret = st.secrets.get("DATABASE_URL")
     except Exception:
-        pass
-
-    env_url = os.getenv("DATABASE_URL")
-    if env_url:
-        return env_url
-
-    fallback_dir = Path("/tmp/aland_history")
-    fallback_dir.mkdir(parents=True, exist_ok=True)
-    return f"sqlite:///{fallback_dir / 'aland_history.db'}"
-
+        secret = None
+    return str(secret or os.getenv("DATABASE_URL") or f"sqlite:///{Path('/tmp/aland_history').resolve() / 'aland_history.db'}")
 
 def _engine():
-    url = get_database_url()
-    if url.startswith("sqlite"):
-        return create_engine(url, pool_pre_ping=True, connect_args={"check_same_thread": False})
-    return create_engine(url, pool_pre_ping=True)
+    url = get_database_url(); Path('/tmp/aland_history').mkdir(parents=True, exist_ok=True)
+    return create_engine(url, pool_pre_ping=True, connect_args={"check_same_thread": False} if url.startswith("sqlite") else {})
 
-
-def init_history_db():
-    try:
-        metadata.create_all(_engine())
-    except OperationalError as e:
-        raise RuntimeError(
-            "历史数据库初始化失败。若在 Streamlit Cloud 长期使用，请配置 Supabase/PostgreSQL 的 DATABASE_URL；"
-            "如果只是临时测试，系统会尝试使用 /tmp/aland_history/aland_history.db。原始错误："
-            + str(e)
-        ) from e
-
-
-def _col(df: pd.DataFrame, names: tuple[str, ...]):
-    for n in names:
-        if n in df.columns:
-            return n
-    return None
-
-
-def _text(v):
-    if pd.isna(v):
-        return ""
-    return str(v).strip()
-
-
-def _num(v):
-    try:
-        return float(v)
-    except Exception:
-        return None
-
-
+def init_history_db(): metadata.create_all(_engine())
+def _col(df, names): return next((n for n in names if n in df.columns), None)
+def _text(v): return "" if pd.isna(v) else str(v).strip()
 def _date(v):
-    ts = pd.to_datetime(v, errors="coerce")
-    if pd.isna(ts):
-        return ""
-    return ts.strftime("%Y-%m-%d")
+    t=pd.to_datetime(v, errors='coerce'); return "" if pd.isna(t) else t.strftime('%Y-%m-%d')
+def _insert_batch(conn,*args):
+    batch_id, table_type, file_name, row_count, date_min, date_max, file_hash=args
+    conn.execute(insert(upload_batches).values(batch_id=batch_id,table_type=table_type,file_name=file_name or "",row_count=row_count,date_min=date_min or "",date_max=date_max or "",file_hash=file_hash,uploaded_at=datetime.utcnow().isoformat()))
+def _upsert_stmt(table, rows, key_col, dialect):
+    base = pg_insert(table).values(rows) if dialect=='postgresql' else sqlite_insert(table).values(rows)
+    return base.on_conflict_do_update(index_elements=[key_col], set_={c.name:getattr(base.excluded,c.name) for c in table.columns if c.name not in ('id',key_col)})
 
-
-def _hash_row(row: dict) -> str:
-    return hashlib.md5(json.dumps(row, ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest()
-
-
-def _insert_batch(conn, batch_id, table_type, file_name, row_count, date_min, date_max, file_hash):
-    conn.execute(insert(upload_batches).values(batch_id=batch_id, table_type=table_type, file_name=file_name or "", row_count=row_count, date_min=date_min or "", date_max=date_max or "", file_hash=file_hash, uploaded_at=datetime.utcnow().isoformat()))
-
-
-def save_orders_history(orders_df: pd.DataFrame, file_name: str | None = None) -> dict:
-    init_history_db()
-    batch_id = datetime.utcnow().strftime("%Y%m%d_%H%M%S_orders")
-    date_col = _col(orders_df, ("订单成交时间", "支付时间"))
-    pay_col = _col(orders_df, ("支付时间",))
-    recv_col = _col(orders_df, ("商家实收金额(元)", "商家实收", "商家实收金额", "商家实收(元)"))
-    goods_id_col = _col(orders_df, ("商品id", "商品ID", "商品Id"))
-    key_col = _col(orders_df, ("订单号", "订单编号", "父订单编号", "子订单编号"))
-
-    inserted = updated = skipped = 0
-    all_dates = []
-    chunk_size = 1000
-    payloads: list[dict] = []
-    for idx, row in orders_df.fillna("").iterrows():
-        raw = row.to_dict()
-        order_date = _date(raw.get(date_col)) if date_col else ""
-        pay_date = _date(raw.get(pay_col)) if pay_col else ""
-        effective_date = order_date or pay_date
-        if effective_date:
-            all_dates.append(effective_date)
-
-        if key_col and _text(raw.get(key_col)):
-            order_key = _text(raw.get(key_col))
-        else:
-            fallback = f"{_text(raw.get(goods_id_col))}|{_text(raw.get('商品规格'))}|{pay_date}|{_text(raw.get(recv_col))}|{idx}"
-            order_key = hashlib.md5(fallback.encode()).hexdigest()
-
-        payloads.append(
-            {
-                "order_key": order_key,
-                "store_name": _text(raw.get("店铺名称")),
-                "goods_id": _text(raw.get(goods_id_col)) if goods_id_col else "",
-                "goods_name": _text(raw.get("商品名称")),
-                "goods_spec": _text(raw.get("商品规格")),
-                "order_status": _text(raw.get("订单状态")),
-                "after_sale_status": _text(raw.get("售后状态")),
-                "order_date": order_date,
-                "pay_date": pay_date,
-                "merchant_receivable": _num(raw.get(recv_col)) if recv_col else None,
-                "raw_json": json.dumps(raw, ensure_ascii=False, default=str),
-                "batch_id": batch_id,
-                "uploaded_at": datetime.utcnow().isoformat(),
-            }
-        )
-
-    eng = _engine()
+def save_orders_history(df: pd.DataFrame, file_name: str|None=None)->dict:
+    init_history_db();batch_id=datetime.utcnow().strftime('%Y%m%d_%H%M%S_orders')
+    key_col=_col(df,("订单号","订单编号","父订单编号","子订单编号"));gid=_col(df,("商品ID","商品id","goods_id"));platform_col=_col(df,("平台",));store_col=_col(df,("店铺名称",));dcol=_col(df,("订单成交时间",));pcol=_col(df,("支付时间",))
+    rows=[];dates=[]
+    for _,r in df.fillna("").iterrows():
+        raw=r.to_dict();platform=_text(raw.get(platform_col)) or '拼多多';store=_text(raw.get(store_col));oid=_text(raw.get(key_col));
+        if not oid: continue
+        od,pd_=_date(raw.get(dcol)),_date(raw.get(pcol));eff=od or pd_; dates += [eff] if eff else []
+        rows.append({"order_key":f"{platform}|{store}|{oid}","platform":platform,"store_name":store,"goods_id":_text(raw.get(gid)),"order_date":od,"pay_date":pd_,"raw_json":json.dumps(raw,ensure_ascii=False,default=str),"batch_id":batch_id,"uploaded_at":datetime.utcnow().isoformat()})
+    eng=_engine(); inserted=updated=0
     with eng.begin() as conn:
-        try:
-            conn.exec_driver_sql("SET statement_timeout = '120s'")
-        except Exception:
-            pass
-        dialect = eng.dialect.name
-        for start in range(0, len(payloads), chunk_size):
-            chunk = payloads[start : start + chunk_size]
-            if not chunk:
-                continue
-            keys = list({item["order_key"] for item in chunk if item.get("order_key")})
-            existing_keys = set()
-            if keys:
-                existing_keys = set(conn.execute(select(orders_raw.c.order_key).where(orders_raw.c.order_key.in_(keys))).scalars().all())
-            updated += len(existing_keys)
-            inserted += len(keys) - len(existing_keys)
+        keys=[x['order_key'] for x in rows]; ex=set(conn.execute(select(orders_raw.c.order_key).where(orders_raw.c.order_key.in_(keys))).scalars().all()) if keys else set(); updated=len(ex); inserted=len(keys)-len(ex)
+        for i in range(0,len(rows),1000):
+            ch=rows[i:i+1000]
+            if ch: conn.execute(_upsert_stmt(orders_raw,ch,'order_key',eng.dialect.name))
+        dmin,dmax=(min(dates),max(dates)) if dates else ("","")
+        _insert_batch(conn,batch_id,'orders',file_name,len(df),dmin,dmax,"")
+    return {"batch_id":batch_id,"inserted":inserted,"updated":updated,"skipped":0,"date_min":dmin,"date_max":dmax,"row_count":len(df)}
 
-            if dialect == "postgresql":
-                stmt = pg_insert(orders_raw).values(chunk)
-            elif dialect == "sqlite":
-                stmt = sqlite_insert(orders_raw).values(chunk)
-            else:
-                raise RuntimeError(f"unsupported db dialect: {dialect}")
-            stmt = stmt.on_conflict_do_update(
-                index_elements=["order_key"],
-                set_={
-                    "store_name": stmt.excluded.store_name,
-                    "goods_id": stmt.excluded.goods_id,
-                    "goods_name": stmt.excluded.goods_name,
-                    "goods_spec": stmt.excluded.goods_spec,
-                    "order_status": stmt.excluded.order_status,
-                    "after_sale_status": stmt.excluded.after_sale_status,
-                    "order_date": stmt.excluded.order_date,
-                    "pay_date": stmt.excluded.pay_date,
-                    "merchant_receivable": stmt.excluded.merchant_receivable,
-                    "raw_json": stmt.excluded.raw_json,
-                    "batch_id": stmt.excluded.batch_id,
-                    "uploaded_at": stmt.excluded.uploaded_at,
-                },
-            )
-            conn.execute(stmt)
-
-        file_hash = hashlib.md5(pd.util.hash_pandas_object(orders_df.astype(str), index=True).values.tobytes()).hexdigest() if not orders_df.empty else ""
-        dmin, dmax = (min(all_dates), max(all_dates)) if all_dates else ("", "")
-        _insert_batch(conn, batch_id, "orders", file_name, len(orders_df), dmin, dmax, file_hash)
-
-    return {"batch_id": batch_id, "inserted": inserted, "updated": updated, "skipped": skipped, "date_min": dmin, "date_max": dmax, "row_count": len(orders_df)}
-
-
-def save_promotion_history(promo_df: pd.DataFrame, file_name: str | None = None) -> dict:
-    init_history_db()
-    batch_id = datetime.utcnow().strftime("%Y%m%d_%H%M%S_promotion")
-    date_col = _col(promo_df, ("日期", "统计日期", "推广日期", "开始日期", "结束日期"))
-    spend_col = _col(promo_df, ("成交花费", "成交花费(元)", "实际成交花费(元)", "实际成交花费", "推广费"))
-    goods_id_col = _col(promo_df, ("商品ID", "商品id"))
-    inserted = updated = skipped = 0
-    all_dates = []
-    chunk_size = 1000
-    payloads: list[dict] = []
-    for idx, row in promo_df.fillna("").iterrows():
-        raw = row.to_dict()
-        promo_date = _date(raw.get(date_col)) if date_col else ""
-        if promo_date:
-            all_dates.append(promo_date)
-        core_hash = _hash_row({"goods_id": _text(raw.get(goods_id_col)) if goods_id_col else "", "promo_date": promo_date, "spend": _text(raw.get(spend_col)) if spend_col else "", "row": raw})
-        if promo_date and goods_id_col:
-            promo_key = f"{_text(raw.get(goods_id_col))}|{promo_date}|{core_hash[:12]}"
-        else:
-            promo_key = f"{batch_id}|{idx}|{core_hash}"
-        payloads.append(
-            {
-                "promo_key": promo_key,
-                "store_name": _text(raw.get("店铺名称")),
-                "goods_id": _text(raw.get(goods_id_col)) if goods_id_col else "",
-                "promo_date": promo_date,
-                "spend": _num(raw.get(spend_col)) if spend_col else None,
-                "transaction_amount": _num(raw.get("总交易额(元)")) or _num(raw.get("交易金额")),
-                "raw_json": json.dumps(raw, ensure_ascii=False, default=str),
-                "batch_id": batch_id,
-                "uploaded_at": datetime.utcnow().isoformat(),
-            }
-        )
-    eng = _engine()
+def save_promotion_history(df: pd.DataFrame, file_name: str|None=None)->dict:
+    init_history_db();batch_id=datetime.utcnow().strftime('%Y%m%d_%H%M%S_promotion')
+    dcol=_col(df,("日期","时间","统计日期","推广日期"));gid=_col(df,("商品ID","商品id","商品 Id","goods_id"));sp=_col(df,("实际成交花费(元)","实际成交花费","成交花费","花费","推广花费","消耗"));platform_col=_col(df,("平台",));store_col=_col(df,("店铺名称",))
+    rows=[];dates=[]
+    for _,r in df.fillna("").iterrows():
+        raw=r.to_dict();platform=_text(raw.get(platform_col)) or '拼多多';store=_text(raw.get(store_col));g=_text(raw.get(gid));d=_date(raw.get(dcol));
+        if not (g and d): continue
+        dates.append(d)
+        rows.append({"promo_key":f"{platform}|{store}|{d}|{g}","platform":platform,"store_name":store,"goods_id":g,"promo_date":d,"spend":pd.to_numeric(raw.get(sp),errors='coerce'),"raw_json":json.dumps(raw,ensure_ascii=False,default=str),"batch_id":batch_id,"uploaded_at":datetime.utcnow().isoformat()})
+    eng=_engine(); inserted=updated=0
     with eng.begin() as conn:
-        try:
-            conn.exec_driver_sql("SET statement_timeout = '120s'")
-        except Exception:
-            pass
-        dialect = eng.dialect.name
-        for start in range(0, len(payloads), chunk_size):
-            chunk = payloads[start : start + chunk_size]
-            if not chunk:
-                continue
-            keys = list({item["promo_key"] for item in chunk if item.get("promo_key")})
-            existing_keys = set()
-            if keys:
-                existing_keys = set(conn.execute(select(promotion_raw.c.promo_key).where(promotion_raw.c.promo_key.in_(keys))).scalars().all())
-            updated += len(existing_keys)
-            inserted += len(keys) - len(existing_keys)
+        keys=[x['promo_key'] for x in rows]; ex=set(conn.execute(select(promotion_raw.c.promo_key).where(promotion_raw.c.promo_key.in_(keys))).scalars().all()) if keys else set(); updated=len(ex); inserted=len(keys)-len(ex)
+        for i in range(0,len(rows),1000):
+            ch=rows[i:i+1000]
+            if ch: conn.execute(_upsert_stmt(promotion_raw,ch,'promo_key',eng.dialect.name))
+        dmin,dmax=(min(dates),max(dates)) if dates else ("","")
+        _insert_batch(conn,batch_id,'promotion',file_name,len(df),dmin,dmax,"")
+    return {"batch_id":batch_id,"inserted":inserted,"updated":updated,"skipped":0,"date_min":dmin,"date_max":dmax,"row_count":len(df)}
 
-            if dialect == "postgresql":
-                stmt = pg_insert(promotion_raw).values(chunk)
-            elif dialect == "sqlite":
-                stmt = sqlite_insert(promotion_raw).values(chunk)
-            else:
-                raise RuntimeError(f"unsupported db dialect: {dialect}")
-            stmt = stmt.on_conflict_do_update(
-                index_elements=["promo_key"],
-                set_={
-                    "store_name": stmt.excluded.store_name,
-                    "goods_id": stmt.excluded.goods_id,
-                    "promo_date": stmt.excluded.promo_date,
-                    "spend": stmt.excluded.spend,
-                    "transaction_amount": stmt.excluded.transaction_amount,
-                    "raw_json": stmt.excluded.raw_json,
-                    "batch_id": stmt.excluded.batch_id,
-                    "uploaded_at": stmt.excluded.uploaded_at,
-                },
-            )
-            conn.execute(stmt)
-        file_hash = hashlib.md5(pd.util.hash_pandas_object(promo_df.astype(str), index=True).values.tobytes()).hexdigest() if not promo_df.empty else ""
-        dmin, dmax = (min(all_dates), max(all_dates)) if all_dates else ("", "")
-        _insert_batch(conn, batch_id, "promotion", file_name, len(promo_df), dmin, dmax, file_hash)
-    return {"batch_id": batch_id, "inserted": inserted, "updated": updated, "skipped": skipped, "date_min": dmin, "date_max": dmax, "row_count": len(promo_df)}
+def save_master_table_history(table_key:str,df:pd.DataFrame,file_name:str|None=None)->dict:
+    mapping={"product_master":(product_master_current,lambda r:_text(r.get("标准产品ID"))),"sales_spec_mapping":(sales_spec_mapping_current,lambda r:_text(r.get("销售规格ID"))),"link_spec_mapping":(link_spec_mapping_current,lambda r:f"{_text(r.get('平台')) or '拼多多'}|{_text(r.get('店铺名称'))}|{_text(r.get('商品ID') or r.get('商品id'))}|{_text(r.get('商品规格'))}")}
+    table,keyer=mapping[table_key];batch_id=datetime.utcnow().strftime(f'%Y%m%d_%H%M%S_{table_key}')
+    by={}
+    for _,r in df.fillna("").iterrows():
+        raw=r.to_dict();k=keyer(raw)
+        if k: by[k]={"row_key":k,"raw_json":json.dumps(raw,ensure_ascii=False,default=str),"uploaded_at":datetime.utcnow().isoformat()}
+    rows=list(by.values());dup=max(len(df)-len(rows),0)
+    eng=_engine();inserted=updated=0
+    with eng.begin() as conn:
+        keys=[x['row_key'] for x in rows]; ex=set(conn.execute(select(table.c.row_key).where(table.c.row_key.in_(keys))).scalars().all()) if keys else set(); updated=len(ex); inserted=len(keys)-len(ex)
+        for i in range(0,len(rows),1000):
+            ch=rows[i:i+1000]
+            if ch: conn.execute(_upsert_stmt(table,ch,'row_key',eng.dialect.name))
+        _insert_batch(conn,batch_id,table_key,file_name,len(df),"","","")
+    return {"batch_id":batch_id,"inserted":inserted,"updated":updated,"skipped":0,"date_min":"","date_max":"","row_count":len(rows),"duplicates_removed":dup}
 
+def save_cashflow_history(df:pd.DataFrame,file_name:str|None=None)->dict:
+    init_history_db();batch_id=datetime.utcnow().strftime('%Y%m%d_%H%M%S_cashflow')
+    tcol=_col(df,("时间",));fcol=_col(df,("流水类型",));acol=_col(df,("交易金额",));scol=_col(df,("交易摘要",));platform_col=_col(df,("平台",));store_col=_col(df,("店铺名称",))
+    rows=[];dates=[];skipped=0
+    for _,r in df.fillna("").iterrows():
+        raw=r.to_dict();ft=_text(raw.get(fcol));sm=_text(raw.get(scol))
+        if ("支出" not in ft) or ("推广支出" not in sm): skipped+=1; continue
+        platform=_text(raw.get(platform_col)) or '拼多多';store=_text(raw.get(store_col));tm=_text(raw.get(tcol));d=_date(raw.get(tcol));dates += [d] if d else []
+        amt=pd.to_numeric(raw.get(acol),errors='coerce')
+        key=f"{platform}|{store}|{tm}|{ft}|{amt}|{sm}"
+        rows.append({"cashflow_key":key,"platform":platform,"store_name":store,"cashflow_time":tm,"cashflow_date":d,"flow_type":ft,"transaction_amount":amt,"transaction_summary":sm,"raw_json":json.dumps(raw,ensure_ascii=False,default=str),"batch_id":batch_id,"uploaded_at":datetime.utcnow().isoformat()})
+    eng=_engine();inserted=updated=0
+    with eng.begin() as conn:
+        keys=[x['cashflow_key'] for x in rows]; ex=set(conn.execute(select(cashflow_raw.c.cashflow_key).where(cashflow_raw.c.cashflow_key.in_(keys))).scalars().all()) if keys else set(); updated=len(ex); inserted=len(keys)-len(ex)
+        for i in range(0,len(rows),1000):
+            ch=rows[i:i+1000]
+            if ch: conn.execute(_upsert_stmt(cashflow_raw,ch,'cashflow_key',eng.dialect.name))
+        dmin,dmax=(min(dates),max(dates)) if dates else ("","")
+        _insert_batch(conn,batch_id,'cashflow',file_name,len(df),dmin,dmax,"")
+    return {"batch_id":batch_id,"inserted":inserted,"updated":updated,"skipped":skipped,"date_min":dmin,"date_max":dmax,"row_count":len(rows)}
 
-def save_master_table_history(table_key: str, df: pd.DataFrame, file_name: str | None = None) -> dict:
-    mapping = {
-        "product_master": (product_master_current, ("标准产品ID",)),
-        "sales_spec_mapping": (sales_spec_mapping_current, ("销售规格ID",)),
-        "link_spec_mapping": (link_spec_mapping_current, ("商品ID", "商品规格")),
-    }
-    if table_key not in mapping:
-        raise ValueError("unsupported table_key")
-    init_history_db()
-    table, key_cols = mapping[table_key]
-    batch_id = datetime.utcnow().strftime(f"%Y%m%d_%H%M%S_{table_key}")
-    uploaded_at = datetime.utcnow().isoformat()
-    records_by_key: dict[str, dict] = {}
-    for _, row in df.fillna("").iterrows():
-        raw = row.to_dict()
-        if len(key_cols) == 1 and key_cols[0] in raw and _text(raw.get(key_cols[0])):
-            row_key = _text(raw.get(key_cols[0]))
-        elif all(_text(raw.get(c)) for c in key_cols):
-            row_key = "|".join(_text(raw.get(c)) for c in key_cols)
-        else:
-            row_key = _hash_row(raw)
-        records_by_key[row_key] = {
-            "row_key": row_key,
-            "raw_json": json.dumps(raw, ensure_ascii=False, default=str),
-            "uploaded_at": uploaded_at,
-        }
+def _load_raw_json_df(conn,table):
+    rows=conn.execute(select(table.c.raw_json)).fetchall(); return pd.DataFrame([json.loads(r[0]) for r in rows if r[0]]) if rows else pd.DataFrame()
 
-    duplicate_count = len(df) - len(records_by_key)
-    records = list(records_by_key.values())
-
+def load_history_tables(date_start=None,date_end=None)->dict[str,pd.DataFrame]:
     with _engine().begin() as conn:
-        conn.execute(delete(table))
-        if records:
-            conn.execute(insert(table), records)
-        file_hash = hashlib.md5(pd.util.hash_pandas_object(df.astype(str), index=True).values.tobytes()).hexdigest() if not df.empty else ""
-        _insert_batch(conn, batch_id, table_key, file_name, len(df), "", "", file_hash)
-    return {
-        "batch_id": batch_id,
-        "inserted": len(records),
-        "updated": 0,
-        "skipped": 0,
-        "date_min": "",
-        "date_max": "",
-        "row_count": len(records),
-        "duplicates_removed": duplicate_count,
-    }
-
-
-def save_cashflow_history(cashflow_df: pd.DataFrame, file_name: str | None = None) -> dict:
-    init_history_db()
-    batch_id = datetime.utcnow().strftime("%Y%m%d_%H%M%S_cashflow")
-    date_col = _col(cashflow_df, ("日期",))
-    amount_col = _col(cashflow_df, ("店铺每日推广费",))
-    all_dates = []
-    payloads: list[dict] = []
-    for idx, row in cashflow_df.fillna("").iterrows():
-        raw = row.to_dict()
-        cashflow_date = _date(raw.get(date_col)) if date_col else ""
-        if cashflow_date:
-            all_dates.append(cashflow_date)
-        store_name = _text(raw.get("店铺名称"))
-        amount = _num(raw.get(amount_col)) if amount_col else None
-        cashflow_key = f"{cashflow_date}|{store_name}|{idx}|{_hash_row(raw)[:12]}"
-        payloads.append(
-            {
-                "cashflow_key": cashflow_key,
-                "cashflow_date": cashflow_date,
-                "store_name": store_name,
-                "amount": amount,
-                "raw_json": json.dumps(raw, ensure_ascii=False, default=str),
-                "batch_id": batch_id,
-                "uploaded_at": datetime.utcnow().isoformat(),
-            }
-        )
-
-    eng = _engine()
-    with eng.begin() as conn:
-        dialect = eng.dialect.name
-        if dialect == "postgresql":
-            stmt = pg_insert(cashflow_raw).values(payloads)
-        elif dialect == "sqlite":
-            stmt = sqlite_insert(cashflow_raw).values(payloads)
-        else:
-            raise RuntimeError(f"unsupported db dialect: {dialect}")
-        if payloads:
-            stmt = stmt.on_conflict_do_update(
-                index_elements=["cashflow_key"],
-                set_={
-                    "cashflow_date": stmt.excluded.cashflow_date,
-                    "store_name": stmt.excluded.store_name,
-                    "amount": stmt.excluded.amount,
-                    "raw_json": stmt.excluded.raw_json,
-                    "batch_id": stmt.excluded.batch_id,
-                    "uploaded_at": stmt.excluded.uploaded_at,
-                },
-            )
-            conn.execute(stmt)
-        file_hash = hashlib.md5(pd.util.hash_pandas_object(cashflow_df.astype(str), index=True).values.tobytes()).hexdigest() if not cashflow_df.empty else ""
-        dmin, dmax = (min(all_dates), max(all_dates)) if all_dates else ("", "")
-        _insert_batch(conn, batch_id, "cashflow", file_name, len(cashflow_df), dmin, dmax, file_hash)
-    return {"batch_id": batch_id, "inserted": len(payloads), "updated": 0, "skipped": 0, "date_min": dmin, "date_max": dmax, "row_count": len(cashflow_df)}
-
-
-def _load_raw_json_df(conn, table):
-    rows = conn.execute(select(table.c.raw_json)).fetchall()
-    if not rows:
-        return pd.DataFrame()
-    return pd.DataFrame([json.loads(r[0]) for r in rows if r[0]])
-
-
-def load_history_tables(date_start=None, date_end=None) -> dict[str, pd.DataFrame]:
-    init_history_db()
-    with _engine().begin() as conn:
-        od = _load_raw_json_df(conn, orders_raw)
-        pdm = _load_raw_json_df(conn, promotion_raw)
-        pm = _load_raw_json_df(conn, product_master_current)
-        sm = _load_raw_json_df(conn, sales_spec_mapping_current)
-        lm = _load_raw_json_df(conn, link_spec_mapping_current)
-        cf = _load_raw_json_df(conn, cashflow_raw)
-
+        od=_load_raw_json_df(conn,orders_raw); pm=_load_raw_json_df(conn,product_master_current); sm=_load_raw_json_df(conn,sales_spec_mapping_current); lm=_load_raw_json_df(conn,link_spec_mapping_current); pr=_load_raw_json_df(conn,promotion_raw); cf=_load_raw_json_df(conn,cashflow_raw)
     if not od.empty:
-        order_date = pd.to_datetime(od.get("订单成交时间"), errors="coerce")
-        pay_date = pd.to_datetime(od.get("支付时间"), errors="coerce")
-        effective = order_date.fillna(pay_date)
-        if date_start is not None:
-            effective_start = pd.to_datetime(date_start)
-            od = od[effective >= effective_start]
-            effective = effective[effective >= effective_start]
-        if date_end is not None:
-            effective_end = pd.to_datetime(date_end)
-            od = od[effective <= effective_end]
+        d=pd.to_datetime(od.get('订单成交时间'),errors='coerce').fillna(pd.to_datetime(od.get('支付时间'),errors='coerce'))
+        if date_start is not None: od=od[d>=pd.to_datetime(date_start)]; d=d[d>=pd.to_datetime(date_start)]
+        if date_end is not None: od=od[d<=pd.to_datetime(date_end)]
+    if not pr.empty:
+        dc=next((c for c in ('日期','统计日期','推广日期','时间') if c in pr.columns),None)
+        if dc:
+            d=pd.to_datetime(pr[dc],errors='coerce')
+            if date_start is not None: pr=pr[d>=pd.to_datetime(date_start)]; d=d[d>=pd.to_datetime(date_start)]
+            if date_end is not None: pr=pr[d<=pd.to_datetime(date_end)]
+    if not cf.empty and '时间' in cf.columns:
+        d=pd.to_datetime(cf['时间'],errors='coerce')
+        if date_start is not None: cf=cf[d>=pd.to_datetime(date_start)]; d=d[d>=pd.to_datetime(date_start)]
+        if date_end is not None: cf=cf[d<=pd.to_datetime(date_end)]
+    return {"orders":od,"product_master":pm,"sales_spec_mapping":sm,"link_spec_mapping":lm,"promotion":pr,"cashflow":cf}
 
-    if not pdm.empty:
-        date_col = _col(pdm, ("日期", "统计日期", "推广日期", "开始日期", "结束日期"))
-        if date_col:
-            ds = pd.to_datetime(pdm[date_col], errors="coerce")
-            if date_start is not None:
-                pdm = pdm[ds >= pd.to_datetime(date_start)]
-                ds = ds[ds >= pd.to_datetime(date_start)]
-            if date_end is not None:
-                pdm = pdm[ds <= pd.to_datetime(date_end)]
-
-    return {"orders": od if od is not None else pd.DataFrame(), "promotion": pdm if pdm is not None else pd.DataFrame(), "product_master": pm if pm is not None else pd.DataFrame(), "sales_spec_mapping": sm if sm is not None else pd.DataFrame(), "link_spec_mapping": lm if lm is not None else pd.DataFrame(), "cashflow": cf if cf is not None else pd.DataFrame()}
-
-
-def list_upload_batches(limit=50) -> pd.DataFrame:
-    init_history_db()
-    with _engine().begin() as conn:
-        rows = conn.execute(select(upload_batches).order_by(upload_batches.c.id.desc()).limit(limit)).mappings().all()
+def list_upload_batches(limit=50)->pd.DataFrame:
+    with _engine().begin() as conn: rows=conn.execute(select(upload_batches).order_by(upload_batches.c.id.desc()).limit(limit)).mappings().all()
     return pd.DataFrame(rows)
 
-
-def delete_upload_batch(batch_id: str) -> dict:
-    init_history_db()
+def get_history_stats()->dict:
     with _engine().begin() as conn:
-        o = conn.execute(delete(orders_raw).where(orders_raw.c.batch_id == batch_id)).rowcount or 0
-        p = conn.execute(delete(promotion_raw).where(promotion_raw.c.batch_id == batch_id)).rowcount or 0
-        b = conn.execute(delete(upload_batches).where(upload_batches.c.batch_id == batch_id)).rowcount or 0
-    return {"batch_id": batch_id, "orders_deleted": o, "promotion_deleted": p, "batch_deleted": b}
-
-
-def get_history_stats() -> dict:
-    init_history_db()
-    with _engine().begin() as conn:
-        order_min, order_max = conn.execute(select(func.min(orders_raw.c.order_date), func.max(orders_raw.c.order_date))).one()
-        promo_min, promo_max = conn.execute(select(func.min(promotion_raw.c.promo_date), func.max(promotion_raw.c.promo_date))).one()
-        order_count = conn.execute(select(func.count()).select_from(orders_raw)).scalar() or 0
-        promo_count = conn.execute(select(func.count()).select_from(promotion_raw)).scalar() or 0
-    return {"order_min": order_min, "order_max": order_max, "promo_min": promo_min, "promo_max": promo_max, "order_count": order_count, "promo_count": promo_count}
+        order_min,order_max=conn.execute(select(func.min(orders_raw.c.order_date),func.max(orders_raw.c.order_date))).one();promo_min,promo_max=conn.execute(select(func.min(promotion_raw.c.promo_date),func.max(promotion_raw.c.promo_date))).one();cash_min,cash_max=conn.execute(select(func.min(cashflow_raw.c.cashflow_date),func.max(cashflow_raw.c.cashflow_date))).one();order_count=conn.execute(select(func.count()).select_from(orders_raw)).scalar() or 0;promo_count=conn.execute(select(func.count()).select_from(promotion_raw)).scalar() or 0;cash_count=conn.execute(select(func.count()).select_from(cashflow_raw)).scalar() or 0
+    return {"order_min":order_min,"order_max":order_max,"promo_min":promo_min,"promo_max":promo_max,"cashflow_min":cash_min,"cashflow_max":cash_max,"order_count":order_count,"promo_count":promo_count,"cashflow_count":cash_count}
