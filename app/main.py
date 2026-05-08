@@ -25,7 +25,6 @@ from app.database import (
 from app.exporters import to_excel_bytes
 from app.report_pack import build_ppt_report_pack, to_ppt_report_pack_json
 from app.storage import *
-from app.history_store import init_history_db
 from app.pages import (
     baibu_vs_normal,
     business_alerts,
@@ -44,15 +43,12 @@ from app.utils import to_numeric
 from app.validators import validate_all
 from app.validators import detect_promotion_columns
 from app.upload_components import render_common_upload_inputs
+from app.pages import history_v2
 
 
 st.set_page_config(page_title="艾兰得拼多多经营分析系统", layout="wide")
 st.title("艾兰得拼多多经营分析系统")
 init_db()
-try:
-    init_history_db()
-except Exception:
-    pass
 
 
 def _prepare_tables(raw_tables: dict) -> dict:
@@ -234,6 +230,13 @@ def _render_current_data_summary(ctx: dict) -> None:
 
 
 def main() -> None:
+    mode = st.radio("分析模式", ["单次上传分析", "历史数据分析 V2（周期覆盖）", "旧历史数据库分析（停用）"], index=0)
+    if mode == "历史数据分析 V2（周期覆盖）":
+        history_v2.render()
+        return
+    if mode == "旧历史数据库分析（停用）":
+        st.warning("旧历史数据库分析模式已停用，请使用单次上传分析或历史数据分析 V2（周期覆盖）。")
+        return
     tables, source_meta = _render_uploads()
     computed_ctx = None
     filters = {}
