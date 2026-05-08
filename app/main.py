@@ -132,6 +132,10 @@ def _render_uploads() -> tuple[dict, dict]:
                     f"错误信息：{e}"
                 )
 
+
+        st.markdown("---")
+        render_pdd_promo_fund_flow_upload()
+
         try:
             stats = get_history_stats()
         except Exception as e:
@@ -189,6 +193,87 @@ def _render_uploads() -> tuple[dict, dict]:
         st.stop()
     return _prepare_tables(tables), meta
 
+
+
+
+def read_excel_compat(uploaded_file) -> pd.DataFrame:
+    filename = uploaded_file.name.lower()
+    if filename.endswith(".xls"):
+        return pd.read_excel(uploaded_file, engine="xlrd")
+    if filename.endswith(".xlsx"):
+        return pd.read_excel(uploaded_file, engine="openpyxl")
+    raise ValueError("仅支持 .xls 或 .xlsx 文件")
+
+
+def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df.columns = (
+        df.columns.astype(str)
+        .str.strip()
+        .str.replace("\n", "", regex=False)
+        .str.replace(" ", "", regex=False)
+    )
+    return df
+
+
+def clean_pdd_promo_fund_flow(df: pd.DataFrame) -> pd.DataFrame:
+    df = normalize_columns(df)
+
+    required_cols = ["时间", "流水类型", "交易金额", "交易摘要"]
+    missing_cols = [c for c in required_cols if c not in df.columns]
+    if missing_cols:
+        raise ValueError(f"缺失关键字段: {', '.join(missing_cols)}")
+
+    df["时间"] = pd.to_datetime(df["时间"], errors="coerce")
+    df["交易金额"] = pd.to_numeric(df["交易金额"], errors="coerce")
+
+    promo_df = df[
+        (df["流水类型"].astype(str).str.contains("支出", na=False))
+        & (df["交易摘要"].astype(str).str.contains("推广支出", na=False))
+    ].copy()
+    promo_df["日期"] = promo_df["时间"].dt.date
+    return promo_df
+
+
+def summarize_daily_pdd_promo_cost(promo_df: pd.DataFrame) -> pd.DataFrame:
+    group_cols = ["日期"]
+    if "店铺名称" in promo_df.columns:
+        group_cols.append("店铺名称")
+
+    return (
+        promo_df.groupby(group_cols, as_index=False)["交易金额"]
+        .sum()
+        .rename(columns={"交易金额": "拼多多推广花费"})
+    )
+
+
+def render_pdd_promo_fund_flow_upload() -> None:
+    st.markdown("#### 拼多多推广资金流水上传")
+    st.caption("用于店铺级推广资金流水，不包含商品ID，不能直接用于商品ROI。")
+
+    uploaded_file = st.file_uploader(
+        "上传拼多多流水明细表（.xls / .xlsx）",
+        type=["xls", "xlsx"],
+        key="pdd_promo_fund_flow_upload",
+    )
+
+    if uploaded_file is None:
+        st.info("请上传拼多多后台导出的流水明细表。")
+        return
+
+    try:
+        raw_df = read_excel_compat(uploaded_file)
+        promo_df = clean_pdd_promo_fund_flow(raw_df)
+        daily_df = summarize_daily_pdd_promo_cost(promo_df)
+
+        st.success("拼多多推广资金流水读取成功")
+        st.write("推广支出明细")
+        st.dataframe(promo_df, use_container_width=True)
+
+        st.write("每日推广花费汇总")
+        st.dataframe(daily_df, use_container_width=True)
+    except Exception as e:
+        st.error(f"拼多多推广资金流水读取失败：{e}")
 
 def _normalize_filter_selection(selected, all_options):
     """
