@@ -25,17 +25,7 @@ from app.database import (
 from app.exporters import to_excel_bytes
 from app.report_pack import build_ppt_report_pack, to_ppt_report_pack_json
 from app.storage import *
-from app.history_store import (
-    get_database_url,
-    get_history_stats,
-    init_history_db,
-    list_upload_batches,
-    load_history_tables,
-    save_cashflow_history,
-    save_master_table_history,
-    save_orders_history,
-    save_promotion_history,
-)
+from app.history_store import init_history_db
 from app.pages import (
     baibu_vs_normal,
     business_alerts,
@@ -49,7 +39,6 @@ from app.pages import (
     segmentation,
     specs,
     ai_decision,
-    history_data,
 )
 from app.utils import to_numeric
 from app.validators import validate_all
@@ -84,79 +73,25 @@ def _prepare_tables(raw_tables: dict) -> dict:
 
 def _render_uploads() -> tuple[dict, dict]:
     st.header("A/B. 数据上传与校验")
-    mode = st.radio("数据来源模式", ["单次上传分析", "历史数据库分析"], index=0, horizontal=True)
+    mode = "单次上传分析"
     st.info(f"当前为{mode}")
-    st.caption("重复上传同一周期数据时，系统将按业务唯一键自动更新已有记录，不会重复累计。")
+    st.warning("历史数据库分析模式维护中，当前请使用单次上传分析。")
 
     tables = {}
     meta = {"mode": mode, "history_range": None}
 
-    if mode == "单次上传分析":
-        use_sample = st.checkbox("使用 sample_data 样例文件快速调试", value=False)
-        if use_sample:
-            st.info("当前使用 sample_data 样例文件。")
-            tables = load_sample_tables(CONFIG.sample_data_dir)
-        else:
-            st.markdown("### 单次上传分析数据上传")
-            upload_data = render_common_upload_inputs("single")
-            tables = {k: v for k, v in upload_data.items() if not k.startswith("_")}
-
-        if not tables:
-            st.warning("请上传全部必需文件后再分析。")
-            return {}, meta
+    use_sample = st.checkbox("使用 sample_data 样例文件快速调试", value=False)
+    if use_sample:
+        st.info("当前使用 sample_data 样例文件。")
+        tables = load_sample_tables(CONFIG.sample_data_dir)
     else:
-        db_url = get_database_url()
-        if "sqlite" in db_url or "/tmp/aland_history" in db_url:
-            st.warning("当前未配置 DATABASE_URL，历史数据库将使用临时 SQLite，仅适合测试，Streamlit 重启后可能丢失。长期使用请接 Supabase/PostgreSQL。")
+        st.markdown("### 单次上传分析数据上传")
+        upload_data = render_common_upload_inputs("single")
+        tables = {k: v for k, v in upload_data.items() if not k.startswith("_")}
 
-        st.markdown("### 历史数据库数据上传")
-        upload_data = render_common_upload_inputs("history")
-        upload_map = {k: v for k, v in upload_data.items() if not k.startswith("_")}
-        file_names = upload_data.get("_file_names", {})
-
-        if st.button("保存上传数据到历史数据库"):
-            try:
-                required_save_keys = ["orders", "product_master", "sales_spec_mapping", "link_spec_mapping", "promotion", "cashflow"]
-                missing_uploads = [k for k in required_save_keys if k not in upload_map]
-                if missing_uploads:
-                    st.error("请先上传全部 6 个必需数据表后再保存。")
-                else:
-                    st.write(save_orders_history(upload_map["orders"], file_names.get("orders")))
-                    for key in ("product_master", "sales_spec_mapping", "link_spec_mapping"):
-                        result = save_master_table_history(key, upload_map[key], file_names.get(key))
-                        st.write(result)
-                        duplicates_removed = int(result.get("duplicates_removed", 0) or 0)
-                        if duplicates_removed > 0:
-                            st.warning(f"检测到重复映射记录，已按业务唯一键自动去重并保留最后一条：{duplicates_removed} 条。")
-                    st.write(save_promotion_history(upload_map["promotion"], file_names.get("promotion")))
-                    st.write(save_cashflow_history(upload_map["cashflow"], file_names.get("cashflow")))
-                    st.success("历史数据保存完成")
-            except Exception as e:
-                st.error(f"历史数据库保存失败：{e}")
-
-        try:
-            stats = get_history_stats()
-        except Exception as e:
-            st.error(f"历史数据库操作失败：{e}")
-            return {}, meta
-        d0 = pd.to_datetime(stats.get("order_min") or stats.get("promo_min"), errors="coerce")
-        d1 = pd.to_datetime(stats.get("order_max") or stats.get("promo_max"), errors="coerce")
-        if pd.isna(d0) or pd.isna(d1):
-            st.warning("历史库暂无可分析日期，请先保存订单/推广数据。")
-            return {}, meta
-        date_range = st.date_input("历史日期范围", value=(d0.date(), d1.date()))
-        if st.button("从历史数据库加载并分析"):
-            try:
-                ds, de = (date_range if isinstance(date_range, (tuple, list)) and len(date_range) == 2 else (d0.date(), d1.date()))
-                tables = load_history_tables(ds, de)
-                meta["history_range"] = (str(ds), str(de))
-            except Exception as e:
-                st.error(f"历史数据库加载失败：{e}")
-                return {}, meta
-
-        if not tables:
-            st.info("请点击“从历史数据库加载并分析”。")
-            return {}, meta
+    if not tables:
+        st.warning("请上传全部必需文件后再分析。")
+        return {}, meta
 
     required_table_keys = {
         "product_master": "标准产品主档上传",
@@ -439,7 +374,7 @@ def main() -> None:
             + q2_result["经营建议"]
         )
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13 = st.tabs(
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12 = st.tabs(
         [
             "数据质量检查",
             "经营分层",
@@ -453,7 +388,6 @@ def main() -> None:
             "异常清单",
             "Q2考核达成率",
             "🤖 AI经营决策",
-            "历史数据管理",
         ]
     )
 
@@ -494,8 +428,6 @@ def main() -> None:
     with tab12:
         ai_decision.render(ctx=ctx, q2_result=q2_result, notes=get_notes()[:10])
 
-    with tab13:
-        history_data.render()
 
     st.markdown("---")
     st.subheader("产品标签（简单版）")
@@ -589,7 +521,7 @@ def main() -> None:
         "待维护-销售规格映射": ctx.get("mapping_maintenance_lists", {}).get("待维护销售规格映射表", pd.DataFrame()),
         "待维护-标准产品主档": ctx.get("mapping_maintenance_lists", {}).get("待维护标准产品主档表", pd.DataFrame()),
         "Q2考核达成率": pd.DataFrame([q2_result]),
-        "历史上传批次": list_upload_batches(200),
+        "历史上传批次": pd.DataFrame([{"状态": "历史数据库分析模式维护中，当前请使用单次上传分析。"}]),
         "数据来源说明": pd.DataFrame([{"数据来源": "历史数据库" if source_meta.get("mode") == "历史数据库分析" else "单次上传", "历史查询日期范围": " ~ ".join(source_meta.get("history_range") or ("", ""))}]),
     }
 
