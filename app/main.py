@@ -98,11 +98,10 @@ def _render_uploads() -> tuple[dict, dict]:
 
         upload_map = {}
         label_map = {
-            "orders": "上传本期订单表（可选）",
-            "promotion": "上传本期推广表（可选）",
-            "product_master": "上传/更新产品主档表（可选）",
-            "sales_spec_mapping": "上传/更新销售规格映射表（可选）",
-            "link_spec_mapping": "上传/更新店铺链接规格映射表（可选）",
+            "orders": "订单明细上传",
+            "sales_spec_mapping": "商品规格映射上传",
+            "link_spec_mapping": "店铺链接规格映射上传",
+            "promotion": "每日商品ID推广数据上传",
         }
         for key, label in label_map.items():
             file = st.file_uploader(label, type=["csv", "xlsx", "xls"], key=f"upload_hist_{key}")
@@ -171,7 +170,7 @@ def _render_uploads() -> tuple[dict, dict]:
         "sales_spec_mapping": "销售规格映射表",
         "link_spec_mapping": "店铺链接规格映射表",
         "orders": "拼多多原始订单表",
-        "promotion": "拼多多推广汇总表",
+        "promotion": "每日商品ID推广数据",
     }
     missing_required = [label for key, label in required_table_keys.items() if key not in tables or tables[key].empty]
     if missing_required:
@@ -243,22 +242,22 @@ def summarize_daily_pdd_promo_cost(promo_df: pd.DataFrame) -> pd.DataFrame:
     return (
         promo_df.groupby(group_cols, as_index=False)["交易金额"]
         .sum()
-        .rename(columns={"交易金额": "拼多多推广花费"})
+        .rename(columns={"交易金额": "店铺每日推广费"})
     )
 
 
 def render_pdd_promo_fund_flow_upload() -> None:
-    st.markdown("#### 拼多多推广资金流水上传")
-    st.caption("用于店铺级推广资金流水，不包含商品ID，不能直接用于商品ROI。")
+    st.markdown("#### 店铺每日推广费流水上传")
+    st.caption("用于店铺级每日推广费核对，不用于商品ID级ROI。")
 
     uploaded_file = st.file_uploader(
-        "上传拼多多流水明细表（.xls / .xlsx）",
+        "上传店铺推广费流水明细（.xls / .xlsx）",
         type=["xls", "xlsx"],
         key="pdd_promo_fund_flow_upload",
     )
 
     if uploaded_file is None:
-        st.info("请上传拼多多后台导出的流水明细表。")
+        st.info("请上传拼多多后台导出的流水明细表（仅上传后才校验字段）。")
         return
 
     try:
@@ -266,11 +265,11 @@ def render_pdd_promo_fund_flow_upload() -> None:
         promo_df = clean_pdd_promo_fund_flow(raw_df)
         daily_df = summarize_daily_pdd_promo_cost(promo_df)
 
-        st.success("拼多多推广资金流水读取成功")
-        st.write("推广支出明细")
+        st.success("店铺每日推广费流水读取成功")
+        st.write("店铺每日推广费流水明细")
         st.dataframe(promo_df, use_container_width=True)
 
-        st.write("每日推广花费汇总")
+        st.write("店铺每日推广费汇总")
         st.dataframe(daily_df, use_container_width=True)
     except Exception as e:
         st.error(f"拼多多推广资金流水读取失败：{e}")
