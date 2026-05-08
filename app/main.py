@@ -25,6 +25,7 @@ from app.exporters import to_excel_bytes
 from app.report_pack import build_ppt_report_pack, to_ppt_report_pack_json
 from app.storage import *
 from app.history_store import (
+    get_database_url,
     get_history_stats,
     init_history_db,
     list_upload_batches,
@@ -55,7 +56,10 @@ from app.validators import validate_all
 st.set_page_config(page_title="艾兰得拼多多经营分析系统", layout="wide")
 st.title("艾兰得拼多多经营分析系统")
 init_db()
-init_history_db()
+try:
+    init_history_db()
+except Exception:
+    pass
 
 
 def _prepare_tables(raw_tables: dict) -> dict:
@@ -88,6 +92,10 @@ def _render_uploads() -> tuple[dict, dict]:
             st.warning("请上传全部必需文件后再分析。")
             return {}, meta
     else:
+        db_url = get_database_url()
+        if "sqlite" in db_url or "/tmp/aland_history" in db_url:
+            st.warning("当前未配置 DATABASE_URL，历史数据库将使用临时 SQLite，仅适合测试，Streamlit 重启后可能丢失。长期使用请接 Supabase/PostgreSQL。")
+
         upload_map = {}
         label_map = {
             "orders": "上传本期订单表（可选）",
@@ -102,17 +110,30 @@ def _render_uploads() -> tuple[dict, dict]:
                 upload_map[key] = (file.name, load_table(file, file.name, key=key))
 
         if st.button("保存上传数据到历史数据库"):
-            for key, item in upload_map.items():
-                fname, df = item
-                if key == "orders":
-                    st.write(save_orders_history(df, fname))
-                elif key == "promotion":
-                    st.write(save_promotion_history(df, fname))
-                else:
-                    st.write(save_master_table_history(key, df, fname))
-            st.success("历史数据保存完成")
+            try:
+                for key, item in upload_map.items():
+                    fname, df = item
+                    if key == "orders":
+                        st.write(save_orders_history(df, fname))
+                    elif key == "promotion":
+                        st.write(save_promotion_history(df, fname))
+                    else:
+                        st.write(save_master_table_history(key, df, fname))
+                st.success("历史数据保存完成")
+            except Exception as e:
+                st.error(
+                    "历史数据库操作失败：\n请检查是否已配置 DATABASE_URL，或先使用“单次上传分析”模式。\n"
+                    f"错误信息：{e}"
+                )
 
-        stats = get_history_stats()
+        try:
+            stats = get_history_stats()
+        except Exception as e:
+            st.error(
+                "历史数据库操作失败：\n请检查是否已配置 DATABASE_URL，或先使用“单次上传分析”模式。\n"
+                f"错误信息：{e}"
+            )
+            return {}, meta
         d0 = pd.to_datetime(stats.get("order_min") or stats.get("promo_min"), errors="coerce")
         d1 = pd.to_datetime(stats.get("order_max") or stats.get("promo_max"), errors="coerce")
         if pd.isna(d0) or pd.isna(d1):
@@ -120,9 +141,16 @@ def _render_uploads() -> tuple[dict, dict]:
             return {}, meta
         date_range = st.date_input("历史日期范围", value=(d0.date(), d1.date()))
         if st.button("从历史数据库加载并分析"):
-            ds, de = (date_range if isinstance(date_range, (tuple, list)) and len(date_range) == 2 else (d0.date(), d1.date()))
-            tables = load_history_tables(ds, de)
-            meta["history_range"] = (str(ds), str(de))
+            try:
+                ds, de = (date_range if isinstance(date_range, (tuple, list)) and len(date_range) == 2 else (d0.date(), d1.date()))
+                tables = load_history_tables(ds, de)
+                meta["history_range"] = (str(ds), str(de))
+            except Exception as e:
+                st.error(
+                    "历史数据库操作失败：\n请检查是否已配置 DATABASE_URL，或先使用“单次上传分析”模式。\n"
+                    f"错误信息：{e}"
+                )
+                return {}, meta
 
         if not tables:
             st.info("请点击“从历史数据库加载并分析”。")

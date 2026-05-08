@@ -22,6 +22,8 @@ from sqlalchemy import (
     select,
 )
 
+from sqlalchemy.exc import OperationalError
+
 
 metadata = MetaData()
 
@@ -85,18 +87,32 @@ def get_database_url() -> str:
             return str(secret_url)
     except Exception:
         pass
-    return os.getenv("DATABASE_URL") or "sqlite:///data/aland_history.db"
+
+    env_url = os.getenv("DATABASE_URL")
+    if env_url:
+        return env_url
+
+    fallback_dir = Path("/tmp/aland_history")
+    fallback_dir.mkdir(parents=True, exist_ok=True)
+    return f"sqlite:///{fallback_dir / 'aland_history.db'}"
 
 
 def _engine():
     url = get_database_url()
-    if url.startswith("sqlite:///"):
-        Path("data").mkdir(parents=True, exist_ok=True)
-    return create_engine(url)
+    if url.startswith("sqlite"):
+        return create_engine(url, pool_pre_ping=True, connect_args={"check_same_thread": False})
+    return create_engine(url, pool_pre_ping=True)
 
 
 def init_history_db():
-    metadata.create_all(_engine())
+    try:
+        metadata.create_all(_engine())
+    except OperationalError as e:
+        raise RuntimeError(
+            "历史数据库初始化失败。若在 Streamlit Cloud 长期使用，请配置 Supabase/PostgreSQL 的 DATABASE_URL；"
+            "如果只是临时测试，系统会尝试使用 /tmp/aland_history/aland_history.db。原始错误："
+            + str(e)
+        ) from e
 
 
 def _col(df: pd.DataFrame, names: tuple[str, ...]):
