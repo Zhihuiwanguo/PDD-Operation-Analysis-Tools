@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pandas as pd
 import streamlit as st
+from datetime import datetime
 
 from app.analyzers import build_analysis_context, compute_kpi_assessment
 from app.data_diagnostics import diagnose_sales_difference
@@ -299,58 +300,84 @@ def _render_current_data_summary(ctx: dict) -> None:
 
 def main() -> None:
     tables, source_meta = _render_uploads()
-    if not tables:
-        return
+    computed_ctx = None
+    filters = {}
 
-    full_ctx = build_analysis_context(tables)
-    filters = _build_global_filters(full_ctx["orders_enriched"])
-    computed_ctx = build_analysis_context(tables, filters=filters)
-    computed_ctx["sales_difference_diagnosis"] = diagnose_sales_difference(computed_ctx, full_ctx=full_ctx)
+    if st.button("清除当前分析，重新上传"):
+        st.session_state.pop("active_analysis_ctx", None)
+        st.session_state.pop("active_source_meta", None)
+        st.session_state.pop("active_data_fingerprint", None)
+        st.rerun()
+
+    if tables:
+        full_ctx = build_analysis_context(tables)
+        filters = _build_global_filters(full_ctx["orders_enriched"])
+        computed_ctx = build_analysis_context(tables, filters=filters)
+        computed_ctx["sales_difference_diagnosis"] = diagnose_sales_difference(computed_ctx, full_ctx=full_ctx)
+        source_meta["updated_at"] = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+        source_meta["data_fingerprint"] = {
+            k: {"rows": int(v.shape[0]), "cols": int(v.shape[1])}
+            for k, v in tables.items()
+        }
+        st.session_state["active_analysis_ctx"] = computed_ctx
+        st.session_state["active_source_meta"] = source_meta
+        st.session_state["active_data_fingerprint"] = source_meta["data_fingerprint"]
+    elif "active_analysis_ctx" in st.session_state:
+        computed_ctx = st.session_state["active_analysis_ctx"]
+        source_meta = st.session_state.get("active_source_meta", {"mode": "单次上传分析", "history_range": None})
+        filters = _build_global_filters(computed_ctx["orders_enriched"])
+        st.info("当前展示的是最近一次已完成分析结果。如需更换数据，请点击“清除当前分析，重新上传”。")
+    else:
+        st.warning("暂无可展示分析结果，请先上传完整 6 张表并完成分析。")
+        return
 
     st.sidebar.markdown("---")
     st.sidebar.subheader("经营参数设置")
 
     cfg = load_config_db()
-    q2_sales_target = st.sidebar.number_input(
-        "Q2销售目标",
-        min_value=0.0,
-        value=float(cfg.get("q2_sales_target", 0)),
-        step=1000.0,
-    )
-    q2_roi_target = st.sidebar.number_input(
-        "Q2 ROI目标",
-        min_value=0.1,
-        value=float(cfg.get("q2_roi_target", 1.0)),
-        step=0.1,
-    )
-    gross_margin_warn_pct = st.sidebar.number_input(
-        "毛利率预警线(%)",
-        min_value=-100.0,
-        max_value=100.0,
-        value=float(cfg.get("gross_margin_warning", 0.5)),
-        step=0.5,
-    )
-    personal_score_pct = st.sidebar.number_input(
-        "个人指标得分(%)",
-        min_value=0.0,
-        max_value=200.0,
-        value=float(cfg.get("personal_score", 100)),
-        step=1.0,
-    )
-    q2_remaining_days = st.sidebar.number_input(
-        "Q2剩余天数",
-        min_value=1,
-        value=30,
-        step=1,
-    )
+    with st.sidebar.form("business_config_form"):
+        q2_sales_target = st.number_input(
+            "Q2销售目标",
+            min_value=0.0,
+            value=float(cfg.get("q2_sales_target", 0)),
+            step=1000.0,
+        )
+        q2_roi_target = st.number_input(
+            "Q2 ROI目标",
+            min_value=0.1,
+            value=float(cfg.get("q2_roi_target", 1.0)),
+            step=0.1,
+        )
+        gross_margin_warn_pct = st.number_input(
+            "毛利率预警线(%)",
+            min_value=-100.0,
+            max_value=100.0,
+            value=float(cfg.get("gross_margin_warning", 0.5)),
+            step=0.5,
+        )
+        personal_score_pct = st.number_input(
+            "个人指标得分(%)",
+            min_value=0.0,
+            max_value=200.0,
+            value=float(cfg.get("personal_score", 100)),
+            step=1.0,
+        )
+        q2_remaining_days = st.number_input(
+            "Q2剩余天数",
+            min_value=1,
+            value=int(cfg.get("q2_remaining_days", 30)),
+            step=1,
+        )
+        submitted = st.form_submit_button("保存经营配置")
 
-    if st.sidebar.button("保存经营配置"):
+    if submitted:
         save_config_db(
             {
                 "q2_sales_target": float(q2_sales_target),
                 "q2_roi_target": float(q2_roi_target),
                 "gross_margin_warning": float(gross_margin_warn_pct),
                 "personal_score": float(personal_score_pct),
+                "q2_remaining_days": int(q2_remaining_days),
             }
         )
         st.sidebar.success("经营配置已保存")
@@ -392,6 +419,7 @@ def main() -> None:
         st.info(f"当前为历史数据库分析：日期范围 {rng[0]} ~ {rng[1]}")
     else:
         st.info("当前为单次上传分析")
+    st.caption(f"当前数据来源：{source_meta.get('mode', '未知')} | 最近更新时间：{source_meta.get('updated_at', '未知')}")
     st.caption(f"当前日期筛选字段：{ctx['date_field_used']}")
     _render_current_data_summary(ctx)
 
