@@ -8,6 +8,7 @@ from . import (
     overview,
     products,
     promotion,
+    price_chain,
     segmentation,
     specs,
 )
@@ -20,6 +21,7 @@ __all__ = [
     "data_quality",
     "baibu_vs_normal",
     "promotion",
+    "price_chain",
     "segmentation",
     "business_alerts",
     "exceptions",

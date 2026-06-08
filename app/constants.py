@@ -57,6 +57,9 @@ UPLOAD_SPECS: tuple[UploadSpec, ...] = (
 UPLOAD_SPEC_MAP = {spec.key: spec for spec in UPLOAD_SPECS}
 
 PROMOTION_SPEND_COLUMN_ALIASES: tuple[str, ...] = (
+    "推广成交花费",
+    "推广成交花费(元)",
+    "推广成交花费（元）",
     "实际成交花费(元)",
     "实际成交花费",
     "成交花费",
@@ -88,6 +91,12 @@ NUMERIC_COLUMNS: dict[str, tuple[str, ...]] = {
         "点击量",
         "成交订单数",
         "净交易额(元)",
+        "推广成交花费",
+        "结算券花费",
+        "成交营销花费",
+        "总营销花费",
+        "交易额",
+        "净交易额",
     ),
     "cashflow": ("交易金额", "现金支出"),
 }

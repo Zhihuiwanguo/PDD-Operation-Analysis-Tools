@@ -28,10 +28,20 @@ def render(promotion_analysis: dict):
     goods = promotion_analysis.get("goods", pd.DataFrame())
     detail = promotion_analysis.get("detail", pd.DataFrame())
     anomalies = promotion_analysis.get("anomalies", {})
+    account_flow = promotion_analysis.get("account_flow_validation", pd.DataFrame())
+    data_version = promotion_analysis.get("data_version", "old_promotion")
 
     if daily.empty and goods.empty and detail.empty:
         st.info("当前无推广分析数据。")
         return
+
+    st.info(f"当前推广数据口径：{data_version}。经营利润口径只扣推广成交花费，不二次扣结算券。")
+    spend_scope = st.radio(
+        "展示口径切换",
+        ["旧推广口径：只看推广成交花费", "商品营销口径：推广成交花费 + 结算券花费", "经营利润口径：只扣推广成交花费"],
+        horizontal=True,
+    )
+    st.caption("切换项用于页面理解口径；底层利润计算始终采用经营利润口径。")
 
     st.markdown("### 一、店铺级每日推广分析")
     if daily.empty:
@@ -42,6 +52,8 @@ def render(promotion_analysis: dict):
             for c in [
                 "日期",
                 "实际成交花费",
+                "结算券花费",
+                "商品营销总花费",
                 "结算金额",
                 "结算投产比",
                 "推广商品ID数",
@@ -86,6 +98,8 @@ def render(promotion_analysis: dict):
                 "商品ID",
                 "链接标题",
                 "实际成交花费",
+                "结算券花费",
+                "商品营销总花费",
                 "结算金额",
                 "结算投产比",
                 "花费占比",
@@ -130,6 +144,8 @@ def render(promotion_analysis: dict):
                     "商品ID",
                     "链接标题",
                     "实际成交花费",
+                    "结算券花费",
+                    "商品营销总花费",
                     "结算金额",
                     "结算投产比",
                     "曝光",
@@ -176,7 +192,13 @@ def render(promotion_analysis: dict):
                     )
 
     st.markdown("---")
-    st.markdown("### 四、推广异常识别")
+    st.markdown("### 四、账户流水校验")
+    if account_flow.empty:
+        st.info("当前无账户流水校验结果。")
+    else:
+        st.dataframe(account_flow, use_container_width=True)
+
+    st.markdown("### 五、推广异常识别")
     if not anomalies:
         st.info("当前无推广异常结果。")
     else:

@@ -36,6 +36,28 @@ def render(ctx: dict) -> None:
         st.success(dc.get("风险说明", ""))
     st.table(pd.DataFrame([dc]))
 
+    st.markdown("### 商品营销新旧口径诊断")
+    md = ctx.get("marketing_diagnostics", {})
+    summary = md.get("summary", pd.DataFrame()) if isinstance(md, dict) else pd.DataFrame()
+    if summary.empty:
+        st.info("暂无商品营销诊断结果。")
+    else:
+        st.dataframe(summary, use_container_width=True)
+
+    account = ctx.get("account_flow_validation", pd.DataFrame())
+    st.markdown("### 账户流水 vs 商品营销 promo_spend 校验")
+    if isinstance(account, pd.DataFrame) and not account.empty:
+        st.dataframe(account, use_container_width=True)
+    else:
+        st.info("暂无账户流水校验数据。")
+
+    split = ctx.get("discount_split", pd.DataFrame())
+    if isinstance(split, pd.DataFrame) and not split.empty and "是否异常" in split.columns:
+        abnormal = split[split["是否异常"] != "否"]
+        if not abnormal.empty:
+            st.warning("存在店铺设置优惠金额 < 0，已按口径差异/退款结算差异提示，不阻断分析。")
+            st.dataframe(abnormal, use_container_width=True)
+
     st.markdown("### 数据差异诊断")
     sd = ctx.get("sales_difference_diagnosis", {})
     show_keys = ["原始有效订单商家实收", "当前分析商家实收", "差异金额", "差异率", "未映射订单商家实收", "筛选排除商家实收", "无效订单商家实收", "待确认订单商家实收"]
