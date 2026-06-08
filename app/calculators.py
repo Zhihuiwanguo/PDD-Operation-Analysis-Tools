@@ -9,6 +9,7 @@ import pandas as pd
 
 from app.config import CONFIG
 from app.constants import PROMOTION_SPEND_COLUMN_ALIASES
+from app.marketing_schema import standardize_promotion_table, classify_cashflow
 from app.utils import safe_divide
 
 
@@ -241,36 +242,39 @@ def prepare_enriched_orders(
 
 
 def aggregate_promotion_by_product(promotion_df: pd.DataFrame) -> pd.DataFrame:
-    if "商品ID" not in promotion_df.columns:
-        return pd.DataFrame(columns=["商品ID", "实际成交花费(元)"])
+    std = standardize_promotion_table(promotion_df)
+    if std.empty:
+        return pd.DataFrame(columns=["商品ID", "实际成交花费(元)", "推广成交花费", "结算券花费", "商品营销总花费"])
 
-    out = promotion_df.copy()
-    out["商品ID"] = out["商品ID"].fillna("").astype(str).str.strip()
+    out = std.copy()
+    out["商品ID"] = out["goods_id"].fillna("").astype(str).str.strip()
     out = out[~out["商品ID"].isin(["", "-", "nan", "None"])].copy()
-
-    spend_col = next((col for col in PROMOTION_SPEND_COLUMN_ALIASES if col in out.columns), None)
-    if spend_col is None:
-        out["实际成交花费(元)"] = 0.0
-    else:
-        out["实际成交花费(元)"] = pd.to_numeric(out[spend_col], errors="coerce").fillna(0.0)
-
-    return out.groupby("商品ID", as_index=False)["实际成交花费(元)"].sum()
+    grouped = out.groupby("商品ID", as_index=False).agg(
+        **{
+            "实际成交花费(元)": ("promo_spend", "sum"),
+            "推广成交花费": ("promo_spend", "sum"),
+            "结算券花费": ("settlement_coupon_spend", "sum"),
+            "商品营销总花费": ("marketing_total_spend", "sum"),
+        }
+    )
+    return grouped
 
 
 def calc_store_cash_spend(cashflow_df: pd.DataFrame) -> float:
-    df = cashflow_df.copy()
+    classified = classify_cashflow(cashflow_df)
+    if not classified.empty:
+        mask = classified["流水项目"].isin(["商品推广现金支出", "商品推广红包支出"])
+        return float(pd.to_numeric(classified.loc[mask, "金额"], errors="coerce").fillna(0).sum())
 
+    df = cashflow_df.copy()
     if "现金支出" in df.columns:
         return pd.to_numeric(df["现金支出"], errors="coerce").fillna(0).sum()
-
     if {"资金类型", "流水类型", "交易金额"}.issubset(df.columns):
         mask = (df["资金类型"].astype(str) == "现金") & (df["流水类型"].astype(str) == "支出")
         return pd.to_numeric(df.loc[mask, "交易金额"], errors="coerce").fillna(0).sum()
-
     if {"流水类型", "交易金额"}.issubset(df.columns):
         mask = df["流水类型"].astype(str) == "支出"
         return pd.to_numeric(df.loc[mask, "交易金额"], errors="coerce").fillna(0).sum()
-
     return 0.0
 
 

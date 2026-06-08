@@ -14,6 +14,7 @@ from app.constants import (
     UPLOAD_SPECS,
 )
 from app.utils import parse_datetime_range
+from app.marketing_schema import NEW_PROMO_SPEND_ALIASES
 
 
 def normalize_col_name(col: object) -> str:
@@ -40,7 +41,7 @@ def detect_promotion_columns(df: pd.DataFrame) -> dict[str, str | None]:
     return {
         "date": _find_alias(PROMOTION_DATE_COLUMN_ALIASES),
         "goods_id": _find_alias(PROMOTION_GOODS_ID_COLUMN_ALIASES),
-        "spend": _find_alias(PROMOTION_SPEND_COLUMN_ALIASES),
+        "spend": _find_alias(NEW_PROMO_SPEND_ALIASES + PROMOTION_SPEND_COLUMN_ALIASES),
     }
 
 
@@ -62,7 +63,7 @@ def _missing_with_alias(key: str, df: pd.DataFrame, required_cols: tuple[str, ..
             continue
         if key == "promotion" and col == "实际成交花费(元)":
             if promotion_fields.get("spend") is None:
-                missing.append("推广费字段(成交花费/成交花费(元)/实际成交花费(元)/实际成交花费/推广费/花费/推广花费/消耗/推广消耗/实际消耗)")
+                missing.append("推广费字段(推广成交花费/实际成交花费(元)/成交花费/花费/推广花费/消耗等)")
             continue
         if col not in df.columns:
             missing.append(col)

@@ -2,21 +2,44 @@ from __future__ import annotations
 import json, uuid
 from datetime import datetime
 import pandas as pd
-from sqlalchemy import MetaData, Table, Column, Integer, String, Float, Text, DateTime, select, func, delete
+from sqlalchemy import MetaData, Table, Column, Integer, String, Float, Text, DateTime, select, func, delete, inspect, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from app.db_connection import get_engine, get_backend_label
+from app.marketing_schema import standardize_promotion_table
 
 metadata = MetaData()
 history_import_batches_v2 = Table('history_import_batches_v2', metadata, Column('id', Integer, primary_key=True), Column('batch_id', String, unique=True), Column('import_mode', String), Column('platform', String), Column('stores', Text), Column('date_start', String), Column('date_end', String), Column('orders_rows', Integer), Column('promotion_rows', Integer), Column('cashflow_rows', Integer), Column('product_master_rows', Integer), Column('sales_spec_mapping_rows', Integer), Column('link_spec_mapping_rows', Integer), Column('orders_sales_amount', Float), Column('promotion_spend_amount', Float), Column('cashflow_spend_amount', Float), Column('status', String), Column('message', Text), Column('created_at', DateTime))
 orders_history_v2 = Table('orders_history_v2', metadata, Column('id', Integer, primary_key=True), Column('business_key', String, unique=True), Column('platform', String), Column('store_name', String), Column('order_no', String), Column('goods_id', String), Column('order_date', String), Column('pay_date', String), Column('merchant_receivable', Float), Column('raw_json', Text), Column('batch_id', String), Column('imported_at', DateTime))
-promotion_goods_daily_v2 = Table('promotion_goods_daily_v2', metadata, Column('id', Integer, primary_key=True), Column('business_key', String, unique=True), Column('platform', String), Column('store_name', String), Column('promo_date', String), Column('goods_id', String), Column('spend', Float), Column('raw_json', Text), Column('batch_id', String), Column('imported_at', DateTime))
+promotion_goods_daily_v2 = Table('promotion_goods_daily_v2', metadata, Column('id', Integer, primary_key=True), Column('business_key', String, unique=True), Column('platform', String), Column('store_name', String), Column('promo_date', String), Column('goods_id', String), Column('spend', Float), Column('promo_spend', Float, default=0), Column('settlement_coupon_spend', Float, default=0), Column('marketing_total_spend', Float, default=0), Column('ad_transaction_amount', Float, default=0), Column('ad_net_transaction_amount', Float, default=0), Column('old_roi', Float), Column('net_roi', Float), Column('settlement_roi', Float), Column('data_version', String), Column('raw_json', Text), Column('batch_id', String), Column('imported_at', DateTime))
 cashflow_promo_daily_v2 = Table('cashflow_promo_daily_v2', metadata, Column('id', Integer, primary_key=True), Column('business_key', String, unique=True), Column('platform', String), Column('store_name', String), Column('flow_date', String), Column('spend', Float), Column('raw_json', Text), Column('batch_id', String), Column('imported_at', DateTime))
 product_master_current_v2 = Table('product_master_current_v2', metadata, Column('id', Integer, primary_key=True), Column('row_key', String, unique=True), Column('raw_json', Text), Column('updated_at', DateTime))
 sales_spec_mapping_current_v2 = Table('sales_spec_mapping_current_v2', metadata, Column('id', Integer, primary_key=True), Column('row_key', String, unique=True), Column('raw_json', Text), Column('updated_at', DateTime))
 link_spec_mapping_current_v2 = Table('link_spec_mapping_current_v2', metadata, Column('id', Integer, primary_key=True), Column('row_key', String, unique=True), Column('raw_json', Text), Column('updated_at', DateTime))
 
-def init_history_v2_db(): metadata.create_all(get_engine())
+def init_history_v2_db():
+    engine = get_engine()
+    metadata.create_all(engine)
+    _ensure_promotion_marketing_columns(engine)
+
+
+def _ensure_promotion_marketing_columns(engine):
+    existing = {col["name"] for col in inspect(engine).get_columns("promotion_goods_daily_v2")}
+    column_sql = {
+        "promo_spend": "FLOAT DEFAULT 0",
+        "settlement_coupon_spend": "FLOAT DEFAULT 0",
+        "marketing_total_spend": "FLOAT DEFAULT 0",
+        "ad_transaction_amount": "FLOAT DEFAULT 0",
+        "ad_net_transaction_amount": "FLOAT DEFAULT 0",
+        "old_roi": "FLOAT",
+        "net_roi": "FLOAT",
+        "settlement_roi": "FLOAT",
+        "data_version": "VARCHAR",
+    }
+    with engine.begin() as conn:
+        for name, ddl in column_sql.items():
+            if name not in existing:
+                conn.execute(text(f"ALTER TABLE promotion_goods_daily_v2 ADD COLUMN {name} {ddl}"))
 
 
 def _pick(df, cols): return next((c for c in cols if c in df.columns), None)
@@ -37,7 +60,7 @@ def preview_history_import(uploaded_data: dict) -> dict:
     for _,r in orders.fillna('').iterrows():
         store=_t(r.get(ss)); stores.add(store); pf=_t(r.get(pcol)) or '拼多多'; platform=pf
         ono=_t(r.get(oc)); key=f'{pf}|{store}|{ono}'; rows.append(key); odates.append(_d(r.get(od)) or _d(r.get(opd)))
-    pdate=_pick(promo,('日期','时间','统计日期','推广日期')); pgid=_pick(promo,('商品ID','商品id','商品 Id','goods_id')); psp=_pick(promo,('实际成交花费(元)','实际成交花费','成交花费','成交花费(元)','成交花费（元）','花费','推广花费','消耗','推广消耗','实际消耗')); ps=_pick(promo,('店铺名称',)); pp=_pick(promo,('平台',))
+    pdate=_pick(promo,('日期','时间','统计日期','推广日期')); pgid=_pick(promo,('商品ID','商品id','商品 Id','goods_id')); psp=_pick(promo,('推广成交花费','推广成交花费(元)','实际成交花费(元)','实际成交花费','成交花费','成交花费(元)','成交花费（元）','花费','推广花费','消耗','推广消耗','实际消耗')); ps=_pick(promo,('店铺名称',)); pp=_pick(promo,('平台',))
     prows=[]; pdates=[]
     for _,r in promo.fillna('').iterrows():
         store=_t(r.get(ps)); stores.add(store); pf=_t(r.get(pp)) or '拼多多'; platform=pf
@@ -77,11 +100,11 @@ def commit_history_import(uploaded_data: dict, import_scope: dict) -> dict:
             k=f'{pf}|{stn}|{on}'; m[k]={'business_key':k,'platform':pf,'store_name':stn,'order_no':on,'goods_id':_t(r.get(og)),'order_date':_d(r.get(odc)) or _d(r.get(opc)),'pay_date':_d(r.get(opc)),'merchant_receivable':float(pd.to_numeric(r.get(mr), errors='coerce') or 0),'raw_json':json.dumps(raw,ensure_ascii=False,default=str),'batch_id':batch_id,'imported_at':now}
         _upsert(conn, orders_history_v2, list(m.values()), 'business_key'); res['orders']=len(m)
         # promo
-        pr=uploaded_data.get('promotion', pd.DataFrame()); pdc=_pick(pr,('日期','时间','统计日期','推广日期')); pg=_pick(pr,('商品ID','商品id','商品 Id','goods_id')); ps=_pick(pr,('实际成交花费(元)','实际成交花费','成交花费','成交花费(元)','成交花费（元）','花费','推广花费','消耗','推广消耗','实际消耗')); pst=_pick(pr,('店铺名称',)); ppf=_pick(pr,('平台',)); pm={}
+        pr=uploaded_data.get('promotion', pd.DataFrame()); pstd=standardize_promotion_table(pr); pdc=_pick(pr,('日期','时间','统计日期','推广日期')); pg=_pick(pr,('商品ID','商品id','商品 Id','goods_id')); ps=_pick(pr,('推广成交花费','推广成交花费(元)','实际成交花费(元)','实际成交花费','成交花费','成交花费(元)','成交花费（元）','花费','推广花费','消耗','推广消耗','实际消耗')); pst=_pick(pr,('店铺名称',)); ppf=_pick(pr,('平台',)); pm={}
         for _,r in pr.fillna('').iterrows():
-            raw=r.to_dict(); pf=_t(r.get(ppf)) or '拼多多'; stn=_t(r.get(pst)); d=_d(r.get(pdc)); gid=_t(r.get(pg));
+            raw=r.to_dict(); std=pstd.loc[_] if _ in pstd.index else pd.Series(dtype=object); pf=_t(r.get(ppf)) or '拼多多'; stn=_t(std.get('shop_name')) or _t(r.get(pst)); d=_d(std.get('date')) or _d(r.get(pdc)); gid=_t(std.get('goods_id')) or _t(r.get(pg));
             if not (d and gid): continue
-            k=f'{pf}|{stn}|{d}|{gid}'; raw.setdefault('实际成交花费(元)', float(pd.to_numeric(r.get(ps), errors='coerce') or 0)); pm[k]={'business_key':k,'platform':pf,'store_name':stn,'promo_date':d,'goods_id':gid,'spend':float(pd.to_numeric(r.get(ps), errors='coerce') or 0),'raw_json':json.dumps(raw,ensure_ascii=False,default=str),'batch_id':batch_id,'imported_at':now}
+            promo_spend=float(pd.to_numeric(std.get('promo_spend'), errors='coerce') or 0); k=f'{pf}|{stn}|{d}|{gid}'; raw.setdefault('实际成交花费(元)', promo_spend); pm[k]={'business_key':k,'platform':pf,'store_name':stn,'promo_date':d,'goods_id':gid,'spend':promo_spend,'promo_spend':promo_spend,'settlement_coupon_spend':float(pd.to_numeric(std.get('settlement_coupon_spend'), errors='coerce') or 0),'marketing_total_spend':float(pd.to_numeric(std.get('marketing_total_spend'), errors='coerce') or 0),'ad_transaction_amount':float(pd.to_numeric(std.get('ad_transaction_amount'), errors='coerce') or 0),'ad_net_transaction_amount':float(pd.to_numeric(std.get('ad_net_transaction_amount'), errors='coerce') or 0),'old_roi':float(pd.to_numeric(std.get('old_roi'), errors='coerce')) if pd.notna(pd.to_numeric(std.get('old_roi'), errors='coerce')) else None,'net_roi':float(pd.to_numeric(std.get('net_roi'), errors='coerce')) if pd.notna(pd.to_numeric(std.get('net_roi'), errors='coerce')) else None,'settlement_roi':float(pd.to_numeric(std.get('settlement_roi'), errors='coerce')) if pd.notna(pd.to_numeric(std.get('settlement_roi'), errors='coerce')) else None,'data_version':_t(std.get('data_version')),'raw_json':json.dumps(raw,ensure_ascii=False,default=str),'batch_id':batch_id,'imported_at':now}
         _upsert(conn,promotion_goods_daily_v2,list(pm.values()),'business_key'); res['promotion']=len(pm)
         conn.execute(history_import_batches_v2.insert().values(batch_id=batch_id,import_mode='period_replace',platform=platform,stores=json.dumps(stores,ensure_ascii=False),date_start=ds,date_end=de,orders_rows=p.get('orders_rows',0),promotion_rows=p.get('promotion_rows',0),cashflow_rows=p.get('cashflow_rows',0),product_master_rows=len(uploaded_data.get('product_master',pd.DataFrame())),sales_spec_mapping_rows=len(uploaded_data.get('sales_spec_mapping',pd.DataFrame())),link_spec_mapping_rows=len(uploaded_data.get('link_spec_mapping',pd.DataFrame())),orders_sales_amount=p.get('orders_sales_amount',0),promotion_spend_amount=p.get('promotion_spend_amount',0),cashflow_spend_amount=p.get('cashflow_spend_amount',0),status='committed',message='覆盖导入完成',created_at=now))
     return {'batch_id':batch_id,'date_start':ds,'date_end':de,'orders_inserted':res['orders'],'promotion_inserted':res['promotion'],'cashflow_inserted':0,'orders_duplicates_removed':max(p['orders_rows']-p['orders_unique_keys'],0),'promotion_duplicates_removed':max(p['promotion_rows']-p['promotion_unique_keys'],0),'cashflow_duplicates_removed':0,'message':'覆盖导入完成'}
@@ -103,6 +126,7 @@ def load_history_v2_tables(date_start, date_end) -> dict:
         cf_rows=conn.execute(select(cashflow_promo_daily_v2).where(cashflow_promo_daily_v2.c.flow_date>=str(date_start), cashflow_promo_daily_v2.c.flow_date<=str(date_end))).mappings().all()
     cf=pd.DataFrame([{'时间':r['flow_date'],'店铺名称':r['store_name'],'交易金额':r['spend'],'交易摘要':'推广支出汇总','流水类型':'支出'} for r in cf_rows])
     if '实际成交花费(元)' not in pr.columns and 'spend' in pr.columns: pr['实际成交花费(元)']=pr['spend']
+    if 'promo_spend' not in pr.columns and 'spend' in pr.columns: pr['promo_spend']=pr['spend']
     return {'orders':od,'product_master':pm,'sales_spec_mapping':sm,'link_spec_mapping':lm,'promotion':pr,'cashflow':cf}
 
 def list_history_v2_batches(limit=50) -> pd.DataFrame:

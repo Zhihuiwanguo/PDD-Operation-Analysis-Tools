@@ -20,6 +20,13 @@ from app.data_diagnostics import (
     diagnose_sales_difference,
 )
 from app.utils import safe_divide
+from app.marketing_schema import (
+    build_account_flow_validation,
+    build_discount_split,
+    build_marketing_diagnostics,
+    promotion_batch_version,
+    standardize_promotion_table,
+)
 from app.segmentation import segment_links, segment_products
 
 
@@ -164,6 +171,7 @@ def build_analysis_context(
     orders = _apply_order_filters(orders, filters)
 
     promo_df = _apply_promotion_filters(tables["promotion"], filters)
+    promo_std = standardize_promotion_table(promo_df)
     promo_by_product = aggregate_promotion_by_product(promo_df)
 
     if filters and filters.get("goods_ids"):
@@ -180,14 +188,17 @@ def build_analysis_context(
 
     cashflow_df = _apply_cashflow_filters(tables["cashflow"], filters)
     cash_spend = calc_store_cash_spend(cashflow_df)
+    discount_split = build_discount_split(orders, promo_std)
+    account_flow_validation = build_account_flow_validation(promo_std, cashflow_df)
+    marketing_diagnostics = build_marketing_diagnostics(promo_df, promo_std, orders)
 
     link_summary = _analyze_links(orders, promo_by_product)
     product_summary = _analyze_products(orders, promo_by_product)
     spec_summary = _analyze_specs(orders)
     baibu_vs_normal = _analyze_baibu_vs_normal(orders, promo_by_product)
-    promotion_analysis = _analyze_promotion(promo_df)
+    promotion_analysis = _analyze_promotion(promo_df, account_flow_validation)
     business_alerts = _build_business_alerts(link_summary, product_summary, spec_summary)
-    overview = _analyze_overview(orders, cash_spend)
+    overview = _analyze_overview(orders, cash_spend, promo_by_product, discount_split)
     exceptions = _analyze_exceptions(tables, orders, promo_by_product, diagnostics)
     mapping_coverage = analyze_mapping_coverage(tables)
     upload_batch_info = build_upload_batch_info(tables)
@@ -201,6 +212,11 @@ def build_analysis_context(
         "baibu_vs_normal": baibu_vs_normal,
         "promotion_analysis": promotion_analysis,
         "business_alerts": business_alerts,
+        "promotion_standardized": promo_std,
+        "discount_split": discount_split,
+        "price_chain": discount_split,
+        "account_flow_validation": account_flow_validation,
+        "marketing_diagnostics": marketing_diagnostics,
         "overview": overview,
         "exceptions": exceptions,
         "mapping_coverage": mapping_coverage,
@@ -332,10 +348,24 @@ def _build_overview_daily_trend(valid_orders: pd.DataFrame) -> pd.DataFrame:
     return daily
 
 
-def _analyze_overview(orders: pd.DataFrame, cash_spend: float) -> dict:
+def _analyze_overview(orders: pd.DataFrame, cash_spend: float, promo_by_product: pd.DataFrame | None = None, discount_split: pd.DataFrame | None = None) -> dict:
     valid_orders = orders[orders["订单分类"] == "有效"].copy()
+    for amount_col in ["商品总价(元)", "店铺优惠折扣(元)", "平台优惠折扣(元)"]:
+        if amount_col not in valid_orders.columns:
+            valid_orders[amount_col] = 0.0
+        valid_orders[amount_col] = pd.to_numeric(valid_orders[amount_col], errors="coerce").fillna(0.0)
+    total_goods_price = valid_orders["商品总价(元)"].sum()
+    total_shop_discount = valid_orders["店铺优惠折扣(元)"].sum()
+    total_platform_discount = valid_orders["平台优惠折扣(元)"].sum()
     total_user_pay = valid_orders["用户实付金额(元)"].sum()
     total_merchant_income = valid_orders["商家实收金额(元)"].sum()
+    promo_totals = promo_by_product if isinstance(promo_by_product, pd.DataFrame) else pd.DataFrame()
+    promo_spend = float(pd.to_numeric(promo_totals.get("推广成交花费", 0), errors="coerce").fillna(0).sum())
+    coupon_spend = float(pd.to_numeric(promo_totals.get("结算券花费", 0), errors="coerce").fillna(0).sum())
+    marketing_total_spend = float(pd.to_numeric(promo_totals.get("商品营销总花费", 0), errors="coerce").fillna(0).sum())
+    store_discount_amount = total_shop_discount - coupon_spend
+    if isinstance(discount_split, pd.DataFrame) and "店铺设置优惠金额" in discount_split.columns:
+        store_discount_amount = float(pd.to_numeric(discount_split["店铺设置优惠金额"], errors="coerce").fillna(0).sum())
     gross_profit = valid_orders["订单侧估算毛利"].sum()
     valid_order_count = int((orders["订单分类"] == "有效").sum())
     daily_trend = _build_overview_daily_trend(valid_orders)
@@ -346,13 +376,20 @@ def _analyze_overview(orders: pd.DataFrame, cash_spend: float) -> dict:
         "无效订单数": int((orders["订单分类"] == "无效").sum()),
         "待确认订单数": int((orders["订单分类"] == "待确认").sum()),
         "非经营剔除订单数": int((orders["订单分类"] == "非经营剔除").sum()),
+        "商品总价": float(total_goods_price),
+        "店铺优惠折扣": float(total_shop_discount),
+        "平台优惠折扣": float(total_platform_discount),
         "用户实付": float(total_user_pay),
         "商家实收": float(total_merchant_income),
+        "推广成交花费": float(promo_spend),
+        "结算券花费": float(coupon_spend),
+        "商品营销总花费": float(marketing_total_spend),
+        "店铺设置优惠金额": float(store_discount_amount),
         "客单价": float(safe_divide(total_merchant_income, valid_order_count)),
         "订单侧估算毛利": float(gross_profit),
         "店铺总盘推广费（现金口径）": float(cash_spend),
         "店铺整体实际ROI": safe_divide(total_merchant_income, cash_spend),
-        "店铺扣推广后贡献毛利": float(gross_profit - cash_spend),
+        "店铺扣推广后贡献毛利": float(gross_profit - promo_spend),
         "盈亏平衡ROI": safe_divide(total_merchant_income, gross_profit),
     }
 
@@ -473,7 +510,14 @@ def _analyze_links(orders: pd.DataFrame, promo_by_product: pd.DataFrame) -> pd.D
     ).reset_index()
 
     valid_orders = orders[orders["订单分类"] == "有效"]
+    for amount_col in ["商品总价(元)", "店铺优惠折扣(元)", "平台优惠折扣(元)"]:
+        if amount_col not in valid_orders.columns:
+            valid_orders[amount_col] = 0.0
+        valid_orders[amount_col] = pd.to_numeric(valid_orders[amount_col], errors="coerce").fillna(0.0)
     amounts = valid_orders.groupby(group_cols, dropna=False).agg(
+        商品总价=("商品总价(元)", "sum"),
+        店铺优惠折扣=("店铺优惠折扣(元)", "sum"),
+        平台优惠折扣=("平台优惠折扣(元)", "sum"),
         用户实付=("用户实付金额(元)", "sum"),
         商家实收=("商家实收金额(元)", "sum"),
         产品总成本=("产品总成本", "sum"),
@@ -483,15 +527,23 @@ def _analyze_links(orders: pd.DataFrame, promo_by_product: pd.DataFrame) -> pd.D
     ).reset_index()
 
     base = counts.merge(amounts, on=group_cols, how="left")
-    for col in ["用户实付", "商家实收", "产品总成本", "快递总成本", "平台扣点", "订单侧估算毛利"]:
+    for col in ["商品总价", "店铺优惠折扣", "平台优惠折扣", "用户实付", "商家实收", "产品总成本", "快递总成本", "平台扣点", "订单侧估算毛利"]:
         base[col] = base[col].fillna(0.0)
 
     base = base.rename(columns={"商品id": "商品ID", link_title_col: "链接标题"})
     base["商品ID"] = base["商品ID"].astype(str)
 
     result = base.merge(promo_by_product, on="商品ID", how="left")
-    result["实际成交花费(元)"] = pd.to_numeric(result["实际成交花费(元)"], errors="coerce").fillna(0.0)
-    result["扣推广后贡献毛利"] = result["订单侧估算毛利"] - result["实际成交花费(元)"]
+    for col in ["实际成交花费(元)", "推广成交花费", "结算券花费", "商品营销总花费"]:
+        if col not in result.columns:
+            result[col] = 0.0
+        result[col] = pd.to_numeric(result[col], errors="coerce").fillna(0.0)
+    result["推广结算券金额"] = result["结算券花费"]
+    result["店铺设置优惠金额"] = result["店铺优惠折扣"] - result["推广结算券金额"]
+    result["是否异常"] = np.where(result["店铺设置优惠金额"] < -0.01, "口径差异/退款结算差异", "否")
+    result["扣推广后贡献毛利"] = result["订单侧估算毛利"] - result["推广成交花费"]
+    result["经营利润"] = result["扣推广后贡献毛利"]
+    result["商品营销总费率"] = result.apply(lambda r: safe_divide(r["商品营销总花费"], r["商家实收"]), axis=1)
     result = calc_ratio_columns(result)
     return result.sort_values("订单侧估算毛利", ascending=False)
 
@@ -511,7 +563,14 @@ def _build_product_promo(valid_orders: pd.DataFrame, promo_by_product: pd.DataFr
 
     mapped = promo.merge(mapping[["商品id", "标准产品名称"]], on="商品id", how="left")
     mapped = mapped.dropna(subset=["标准产品名称"])
-    return mapped.groupby("标准产品名称", as_index=False)["实际成交花费(元)"].sum()
+    return mapped.groupby("标准产品名称", as_index=False).agg(
+        **{
+            "实际成交花费(元)": ("实际成交花费(元)", "sum"),
+            "推广成交花费": ("推广成交花费", "sum"),
+            "结算券花费": ("结算券花费", "sum"),
+            "商品营销总花费": ("商品营销总花费", "sum"),
+        }
+    )
 
 
 def _product_tier(row: pd.Series) -> str:
@@ -534,8 +593,15 @@ def _analyze_products(orders: pd.DataFrame, promo_by_product: pd.DataFrame) -> p
         非经营剔除订单数=("订单分类", lambda s: int((s == "非经营剔除").sum())),
     ).reset_index()
 
+    for amount_col in ["商品总价(元)", "店铺优惠折扣(元)", "平台优惠折扣(元)"]:
+        if amount_col not in valid_orders.columns:
+            valid_orders[amount_col] = 0.0
+        valid_orders[amount_col] = pd.to_numeric(valid_orders[amount_col], errors="coerce").fillna(0.0)
     metrics = valid_orders.groupby("标准产品名称", dropna=False).agg(
         销售件数=("商品数量(件)", "sum"),
+        商品总价=("商品总价(元)", "sum"),
+        店铺优惠折扣=("店铺优惠折扣(元)", "sum"),
+        平台优惠折扣=("平台优惠折扣(元)", "sum"),
         用户实付=("用户实付金额(元)", "sum"),
         商家实收=("商家实收金额(元)", "sum"),
         产品总成本=("产品总成本", "sum"),
@@ -601,10 +667,13 @@ def _analyze_products(orders: pd.DataFrame, promo_by_product: pd.DataFrame) -> p
     out = counts.merge(metrics, on="标准产品名称", how="left")
     out = out.merge(promo_by_product_name, on="标准产品名称", how="left")
     out = out.merge(baibu_pivot, on="标准产品名称", how="left")
-    out = out.rename(columns={"实际成交花费(元)": "链接推广费合计"})
+    out = out.rename(columns={"实际成交花费(元)": "链接推广费合计", "推广成交花费": "推广成交花费", "结算券花费": "结算券花费", "商品营销总花费": "商品营销总花费"})
 
     for col in [
         "销售件数",
+        "商品总价",
+        "店铺优惠折扣",
+        "平台优惠折扣",
         "用户实付",
         "商家实收",
         "产品总成本",
@@ -612,6 +681,9 @@ def _analyze_products(orders: pd.DataFrame, promo_by_product: pd.DataFrame) -> p
         "平台扣点",
         "订单侧估算毛利",
         "链接推广费合计",
+        "推广成交花费",
+        "结算券花费",
+        "商品营销总花费",
         "百补商家实收",
         "日常商家实收",
         "百补有效订单数",
@@ -621,15 +693,19 @@ def _analyze_products(orders: pd.DataFrame, promo_by_product: pd.DataFrame) -> p
             out[col] = 0.0
         out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0.0)
 
-    out["扣推广后贡献毛利"] = out["订单侧估算毛利"] - out["链接推广费合计"]
-    out["实际ROI"] = out.apply(lambda r: safe_divide(r["商家实收"], r["链接推广费合计"]), axis=1)
+    out["扣推广后贡献毛利"] = out["订单侧估算毛利"] - out["推广成交花费"]
+    out["经营利润"] = out["扣推广后贡献毛利"]
+    out["实际ROI"] = out.apply(lambda r: safe_divide(r["商家实收"], r["推广成交花费"]), axis=1)
     out["盈亏平衡ROI"] = out.apply(lambda r: safe_divide(r["商家实收"], r["订单侧估算毛利"]), axis=1)
 
     out["单均商家实收"] = out.apply(lambda r: safe_divide(r["商家实收"], r["有效订单数"]), axis=1)
     out["单均订单侧毛利"] = out.apply(lambda r: safe_divide(r["订单侧估算毛利"], r["有效订单数"]), axis=1)
     out["订单侧毛利率"] = out.apply(lambda r: safe_divide(r["订单侧估算毛利"], r["商家实收"]), axis=1)
     out["扣推广后毛利率"] = out.apply(lambda r: safe_divide(r["扣推广后贡献毛利"], r["商家实收"]), axis=1)
-    out["推广费率"] = out.apply(lambda r: safe_divide(r["链接推广费合计"], r["商家实收"]), axis=1)
+    out["结算券占店铺优惠比例"] = out.apply(lambda r: safe_divide(r["结算券花费"], r["店铺优惠折扣"]), axis=1)
+    out["经营利润率"] = out.apply(lambda r: safe_divide(r["经营利润"], r["商家实收"]), axis=1)
+    out["推广费率"] = out.apply(lambda r: safe_divide(r["推广成交花费"], r["商家实收"]), axis=1)
+    out["商品营销总费率"] = out.apply(lambda r: safe_divide(r["商品营销总花费"], r["商家实收"]), axis=1)
     out["百补销售占比"] = out.apply(lambda r: safe_divide(r["百补商家实收"], r["商家实收"]), axis=1)
     out["日常销售占比"] = out.apply(lambda r: safe_divide(r["日常商家实收"], r["商家实收"]), axis=1)
 
@@ -1330,13 +1406,25 @@ def _analyze_creative_material(
     }
 
 
-def _analyze_promotion(promo_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
+def _analyze_promotion(promo_df: pd.DataFrame, account_flow_validation: pd.DataFrame | None = None) -> dict[str, pd.DataFrame]:
+    std = standardize_promotion_table(promo_df)
     base = _prepare_promotion_base(promo_df)
+    if not std.empty:
+        base = std.rename(columns={"goods_id": "商品ID", "goods_name": "链接标题", "promo_spend": "实际成交花费", "ad_transaction_amount": "结算金额", "ad_net_transaction_amount": "净交易额"}).copy()
+        base["日期"] = pd.to_datetime(base["date"], errors="coerce")
+        base["曝光"] = 0.0
+        base["点击"] = 0.0
+        base["成交订单数"] = 0.0
+        base["CTR"] = 0.0
+        base["转化率"] = 0.0
+    batch_version = promotion_batch_version(std)
 
     daily = (
         base.groupby("日期", dropna=False)
         .agg(
             实际成交花费=("实际成交花费", "sum"),
+            结算券花费=("settlement_coupon_spend", "sum"),
+            商品营销总花费=("marketing_total_spend", "sum"),
             结算金额=("结算金额", "sum"),
             推广商品ID数=("商品ID", lambda s: int(pd.Series(s).replace("", np.nan).dropna().nunique())),
             曝光=("曝光", "sum"),
@@ -1355,6 +1443,8 @@ def _analyze_promotion(promo_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
         .agg(
             链接标题=("链接标题", "first"),
             实际成交花费=("实际成交花费", "sum"),
+            结算券花费=("settlement_coupon_spend", "sum"),
+            商品营销总花费=("marketing_total_spend", "sum"),
             结算金额=("结算金额", "sum"),
             曝光=("曝光", "sum"),
             点击=("点击", "sum"),
@@ -1380,6 +1470,8 @@ def _analyze_promotion(promo_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
         .agg(
             链接标题=("链接标题", "first"),
             实际成交花费=("实际成交花费", "sum"),
+            结算券花费=("settlement_coupon_spend", "sum"),
+            商品营销总花费=("marketing_total_spend", "sum"),
             结算金额=("结算金额", "sum"),
             曝光=("曝光", "sum"),
             点击=("点击", "sum"),
@@ -1433,7 +1525,13 @@ def _analyze_promotion(promo_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
         "放量但效率恶化商品": scale_up_but_worse,
     }
 
+    daily["data_version"] = batch_version
+    goods["data_version"] = batch_version
+    detail["data_version"] = batch_version
+
     return {
+        "data_version": batch_version,
+        "account_flow_validation": account_flow_validation if account_flow_validation is not None else pd.DataFrame(),
         "daily": daily,
         "goods": goods,
         "detail": detail,

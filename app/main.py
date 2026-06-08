@@ -35,6 +35,7 @@ from app.pages import (
     overview,
     products,
     promotion,
+    price_chain,
     segmentation,
     specs,
     ai_decision,
@@ -42,6 +43,7 @@ from app.pages import (
 from app.utils import to_numeric
 from app.validators import validate_all
 from app.validators import detect_promotion_columns
+from app.marketing_schema import add_standard_promotion_columns
 from app.upload_components import render_common_upload_inputs
 from app.pages import history_v2
 
@@ -55,6 +57,7 @@ def _prepare_tables(raw_tables: dict) -> dict:
     out = {}
     for key, df in raw_tables.items():
         if key == "promotion":
+            df = add_standard_promotion_columns(df)
             promo_fields = detect_promotion_columns(df)
             found_spend_col = promo_fields.get("spend")
             if found_spend_col and found_spend_col != "实际成交花费(元)":
@@ -352,7 +355,7 @@ def main() -> None:
             + q2_result["经营建议"]
         )
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12 = st.tabs(
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13 = st.tabs(
         [
             "数据质量检查",
             "经营分层",
@@ -362,6 +365,7 @@ def main() -> None:
             "规格分析",
             "百补 vs 日常",
             "推广分析",
+            "价格链路",
             "经营异常",
             "异常清单",
             "Q2考核达成率",
@@ -394,16 +398,19 @@ def main() -> None:
         promotion.render(ctx["promotion_analysis"])
 
     with tab9:
-        business_alerts.render(ctx["business_alerts"])
+        price_chain.render(ctx.get("price_chain", pd.DataFrame()))
 
     with tab10:
+        business_alerts.render(ctx["business_alerts"])
+
+    with tab11:
         exceptions.render(ctx["exceptions"])
         exceptions.render_mapping_coverage(ctx.get("mapping_coverage", pd.DataFrame()))
 
-    with tab11:
+    with tab12:
         kpi_assessment.render(q2_result)
 
-    with tab12:
+    with tab13:
         ai_decision.render(ctx=ctx, q2_result=q2_result, notes=get_notes()[:10])
 
 
@@ -477,6 +484,9 @@ def main() -> None:
         "推广分析-每日": ctx["promotion_analysis"]["daily"],
         "推广分析-商品汇总": ctx["promotion_analysis"]["goods"],
         "推广分析-单品明细": ctx["promotion_analysis"]["detail"],
+        "商品营销统一字段": ctx.get("promotion_standardized", pd.DataFrame()),
+        "价格链路-店铺优惠拆分": ctx.get("price_chain", pd.DataFrame()),
+        "账户流水校验": ctx.get("account_flow_validation", pd.DataFrame()),
         **{f"推广异常-{k}": v for k, v in ctx["promotion_analysis"]["anomalies"].items()},
         **{f"经营异常-{k}": v for k, v in ctx["business_alerts"].items()},
         **{f"异常-{k}": v for k, v in ctx["exceptions"].items()},
