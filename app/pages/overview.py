@@ -33,12 +33,22 @@ def render(overview: dict) -> None:
         "店铺整体实际ROI",
         "店铺扣推广后贡献毛利",
         "盈亏平衡ROI",
+        "退款成功订单数",
+        "退款成功率",
+        "退款金额",
+        "剔除退款后商家实收",
+        "售后处理中金额",
+        "确认有效商家实收",
+        "退款后ROI",
+        "确认有效ROI",
     ]
 
     cols = st.columns(3)
     for idx, key in enumerate(metrics):
         val = metrics_dict.get(key, 0)
-        if "ROI" in key:
+        if "率" in key and "ROI" not in key:
+            display = f"{val:.2%}"
+        elif "ROI" in key:
             display = f"{val:.2f}"
         elif "数" in key:
             display = f"{int(val)}"

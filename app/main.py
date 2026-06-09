@@ -36,6 +36,7 @@ from app.pages import (
     products,
     promotion,
     price_chain,
+    refund_after_sale,
     segmentation,
     specs,
     ai_decision,
@@ -355,13 +356,14 @@ def main() -> None:
             + q2_result["经营建议"]
         )
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13 = st.tabs(
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13, tab14 = st.tabs(
         [
             "数据质量检查",
             "经营分层",
             "经营总览",
             "链接分析",
             "产品分析",
+            "退款/售后分析",
             "规格分析",
             "百补 vs 日常",
             "推广分析",
@@ -389,28 +391,31 @@ def main() -> None:
         products.render(ctx["product_summary"])
 
     with tab6:
-        specs.render(ctx["spec_summary"])
+        refund_after_sale.render(ctx.get("refund_analysis", {}))
 
     with tab7:
-        baibu_vs_normal.render(ctx["baibu_vs_normal"])
+        specs.render(ctx["spec_summary"])
 
     with tab8:
-        promotion.render(ctx["promotion_analysis"])
+        baibu_vs_normal.render(ctx["baibu_vs_normal"])
 
     with tab9:
-        price_chain.render(ctx.get("price_chain", pd.DataFrame()))
+        promotion.render(ctx["promotion_analysis"])
 
     with tab10:
-        business_alerts.render(ctx["business_alerts"])
+        price_chain.render(ctx.get("price_chain", pd.DataFrame()))
 
     with tab11:
+        business_alerts.render(ctx["business_alerts"])
+
+    with tab12:
         exceptions.render(ctx["exceptions"])
         exceptions.render_mapping_coverage(ctx.get("mapping_coverage", pd.DataFrame()))
 
-    with tab12:
+    with tab13:
         kpi_assessment.render(q2_result)
 
-    with tab13:
+    with tab14:
         ai_decision.render(ctx=ctx, q2_result=q2_result, notes=get_notes()[:10])
 
 
@@ -476,6 +481,11 @@ def main() -> None:
         "经营总览": pd.DataFrame([ctx["overview"]["metrics"]]),
         "经营总览-每日趋势": ctx["overview"]["daily_trend"],
         "产品经营分层": ctx.get("product_segmentation", pd.DataFrame()),
+        "退款售后-总览": pd.DataFrame([ctx.get("refund_analysis", {}).get("overview", {})]),
+        "退款售后-每日趋势": ctx.get("refund_analysis", {}).get("daily", pd.DataFrame()),
+        "退款售后-产品分析": ctx.get("refund_analysis", {}).get("product", pd.DataFrame()),
+        "退款售后-链接分析": ctx.get("refund_analysis", {}).get("link", pd.DataFrame()),
+        "退款售后-异常提醒": ctx.get("refund_analysis", {}).get("alerts", pd.DataFrame()),
         "链接经营分层": ctx.get("link_segmentation", pd.DataFrame()),
         "链接分析": ctx["link_summary"],
         "产品分析": ctx["product_summary"],

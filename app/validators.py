@@ -15,6 +15,7 @@ from app.constants import (
 )
 from app.utils import parse_datetime_range
 from app.marketing_schema import NEW_PROMO_SPEND_ALIASES
+from app.refund_analysis import GOODS_ID_ALIASES, MERCHANT_INCOME_ALIASES, USER_PAY_ALIASES
 
 
 def normalize_col_name(col: object) -> str:
@@ -41,7 +42,7 @@ def detect_promotion_columns(df: pd.DataFrame) -> dict[str, str | None]:
     return {
         "date": _find_alias(PROMOTION_DATE_COLUMN_ALIASES),
         "goods_id": _find_alias(PROMOTION_GOODS_ID_COLUMN_ALIASES),
-        "spend": _find_alias(NEW_PROMO_SPEND_ALIASES + PROMOTION_SPEND_COLUMN_ALIASES),
+        "spend": _find_alias(PROMOTION_SPEND_COLUMN_ALIASES + NEW_PROMO_SPEND_ALIASES),
     }
 
 
@@ -50,8 +51,24 @@ def _missing_with_alias(key: str, df: pd.DataFrame, required_cols: tuple[str, ..
     missing: list[str] = []
     for col in required_cols:
         if key == "orders" and col == "商品id":
-            if ("商品id" not in df.columns) and ("商品ID" not in df.columns):
-                missing.append("商品id/商品ID")
+            normalized_columns = {normalize_col_name(c): c for c in df.columns}
+            if not any(normalize_col_name(alias) in normalized_columns for alias in GOODS_ID_ALIASES):
+                missing.append("商品id/商品ID/商品编号")
+            continue
+        if key == "orders" and col == "用户实付金额(元)":
+            normalized_columns = {normalize_col_name(c): c for c in df.columns}
+            if not any(normalize_col_name(alias) in normalized_columns for alias in USER_PAY_ALIASES):
+                missing.append("用户实付金额(元)/用户实付金额/用户实付")
+            continue
+        if key == "orders" and col == "商家实收金额(元)":
+            normalized_columns = {normalize_col_name(c): c for c in df.columns}
+            if not any(normalize_col_name(alias) in normalized_columns for alias in MERCHANT_INCOME_ALIASES):
+                missing.append("商家实收金额(元)/商家实收金额/商家实收")
+            continue
+        if key == "orders" and col == "订单成交时间":
+            normalized_columns = {normalize_col_name(c): c for c in df.columns}
+            if not any(normalize_col_name(alias) in normalized_columns for alias in ("订单成交时间", "支付时间", "成交时间", "下单时间")):
+                missing.append("订单成交时间/支付时间/成交时间")
             continue
         if key == "promotion" and col == "日期":
             if promotion_fields.get("date") is None:

@@ -5,6 +5,7 @@ from . import (
     exceptions,
     kpi_assessment,
     links,
+    refund_after_sale,
     overview,
     products,
     promotion,
@@ -16,6 +17,7 @@ from . import (
 __all__ = [
     "overview",
     "links",
+    "refund_after_sale",
     "products",
     "specs",
     "data_quality",

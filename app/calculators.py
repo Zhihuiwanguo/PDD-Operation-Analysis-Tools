@@ -10,7 +10,41 @@ import pandas as pd
 from app.config import CONFIG
 from app.constants import PROMOTION_SPEND_COLUMN_ALIASES
 from app.marketing_schema import standardize_promotion_table, classify_cashflow
+from app.refund_analysis import (
+    GOODS_ID_ALIASES,
+    GOODS_PRICE_ALIASES,
+    GOODS_QTY_ALIASES,
+    MERCHANT_INCOME_ALIASES,
+    USER_PAY_ALIASES,
+    normalize_order_refund_fields,
+    pick_alias,
+)
 from app.utils import safe_divide
+
+
+def _copy_alias_column(df: pd.DataFrame, canonical: str, aliases: tuple[str, ...]) -> pd.DataFrame:
+    """按优先级把历史字段名复制到系统内部标准字段。"""
+    if canonical in df.columns:
+        return df
+    found = pick_alias(df, aliases)
+    if found is not None:
+        df[canonical] = df[found]
+    return df
+
+
+def _ensure_order_aliases(orders: pd.DataFrame) -> pd.DataFrame:
+    orders = orders.copy()
+    orders = _copy_alias_column(orders, "商品id", GOODS_ID_ALIASES)
+    orders = _copy_alias_column(orders, "商品总价(元)", GOODS_PRICE_ALIASES)
+    orders = _copy_alias_column(orders, "用户实付金额(元)", USER_PAY_ALIASES)
+    orders = _copy_alias_column(orders, "商家实收金额(元)", MERCHANT_INCOME_ALIASES)
+    orders = _copy_alias_column(orders, "商品数量(件)", GOODS_QTY_ALIASES)
+    if "商品" not in orders.columns:
+        name_col = pick_alias(orders, ("商品名称", "商品标题", "链接标题"))
+        orders["商品"] = orders[name_col] if name_col else ""
+    if "订单成交时间" not in orders.columns and "支付时间" in orders.columns:
+        orders["订单成交时间"] = orders["支付时间"]
+    return orders
 
 
 def _is_bb(text: str) -> bool:
@@ -71,14 +105,15 @@ def prepare_enriched_orders(
     if missing:
         raise KeyError(f"缺少必需数据表: {', '.join(missing)}")
 
-    orders = classify_orders(tables["orders"]).copy()
+    orders = _ensure_order_aliases(tables["orders"])
+    orders = classify_orders(orders).copy()
 
-    if "商品id" not in orders.columns and "商品ID" in orders.columns:
-        orders = orders.rename(columns={"商品ID": "商品id"})
     if "商品id" not in orders.columns:
         orders["商品id"] = ""
 
     orders["商品id"] = orders["商品id"].fillna("").astype(str).str.strip()
+    if "商品ID" in orders.columns:
+        orders = orders.drop(columns=["商品ID"], errors="ignore")
 
     if "商品规格" not in orders.columns:
         orders["商品规格"] = ""
@@ -193,10 +228,18 @@ def prepare_enriched_orders(
     pm = product_master[["标准产品ID", "标准产品名称"]].drop_duplicates()
     orders = orders.merge(pm, on="标准产品ID", how="left")
 
-    for col in ["用户实付金额(元)", "商家实收金额(元)", "产品总成本", "快递费", "商品数量(件)"]:
+    for col in ["商品总价(元)", "用户实付金额(元)", "商家实收金额(元)", "产品总成本", "快递费", "商品数量(件)"]:
         if col not in orders.columns:
             orders[col] = 0
         orders[col] = pd.to_numeric(orders[col], errors="coerce").fillna(0)
+
+    refund_fields, _refund_messages = normalize_order_refund_fields(orders)
+    for col in [
+        "是否支付订单", "是否退款成功", "是否售后处理中", "是否未发货退款成功", "是否未成交退款成功",
+        "是否发货后退款成功", "是否收货后退款成功", "退款成功商家实收金额", "售后处理中商家实收金额",
+        "商品总价_退款口径", "用户实付_退款口径", "商家实收_退款口径", "商品件数_退款口径",
+    ]:
+        orders[col] = refund_fields.get(col, pd.Series(False if col.startswith("是否") else 0.0, index=orders.index)).values
 
     # 百补识别：优先 是否百补，其次 资源位类型，最后默认非百补
     if "是否百补" in orders.columns:

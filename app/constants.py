@@ -57,6 +57,7 @@ UPLOAD_SPECS: tuple[UploadSpec, ...] = (
 UPLOAD_SPEC_MAP = {spec.key: spec for spec in UPLOAD_SPECS}
 
 PROMOTION_SPEND_COLUMN_ALIASES: tuple[str, ...] = (
+    "成交花费",
     "推广成交花费",
     "推广成交花费(元)",
     "推广成交花费（元）",
@@ -64,6 +65,7 @@ PROMOTION_SPEND_COLUMN_ALIASES: tuple[str, ...] = (
     "实际成交花费",
     "成交花费",
     "成交花费(元)",
+    "花费(元)",
     "花费",
     "推广花费",
     "消耗",
