@@ -19,6 +19,7 @@ from app.data_diagnostics import (
     check_order_promotion_date_consistency,
     diagnose_sales_difference,
 )
+from app.refund_analysis import build_refund_analysis, aggregate_refund_by, summarize_refund_metrics
 from app.utils import safe_divide
 from app.marketing_schema import (
     build_account_flow_validation,
@@ -192,6 +193,7 @@ def build_analysis_context(
     account_flow_validation = build_account_flow_validation(promo_std, cashflow_df)
     marketing_diagnostics = build_marketing_diagnostics(promo_df, promo_std, orders)
 
+    refund_analysis = build_refund_analysis(orders)
     link_summary = _analyze_links(orders, promo_by_product)
     product_summary = _analyze_products(orders, promo_by_product)
     spec_summary = _analyze_specs(orders)
@@ -211,6 +213,7 @@ def build_analysis_context(
         "spec_summary": spec_summary,
         "baibu_vs_normal": baibu_vs_normal,
         "promotion_analysis": promotion_analysis,
+        "refund_analysis": refund_analysis,
         "business_alerts": business_alerts,
         "promotion_standardized": promo_std,
         "discount_split": discount_split,
@@ -369,6 +372,7 @@ def _analyze_overview(orders: pd.DataFrame, cash_spend: float, promo_by_product:
     gross_profit = valid_orders["订单侧估算毛利"].sum()
     valid_order_count = int((orders["订单分类"] == "有效").sum())
     daily_trend = _build_overview_daily_trend(valid_orders)
+    refund_metrics = summarize_refund_metrics(orders)
 
     metrics = {
         "总订单数": int(len(orders)),
@@ -391,6 +395,14 @@ def _analyze_overview(orders: pd.DataFrame, cash_spend: float, promo_by_product:
         "店铺整体实际ROI": safe_divide(total_merchant_income, cash_spend),
         "店铺扣推广后贡献毛利": float(gross_profit - promo_spend),
         "盈亏平衡ROI": safe_divide(total_merchant_income, gross_profit),
+        "退款成功订单数": int(refund_metrics.get("退款成功订单数", 0)),
+        "退款成功率": float(refund_metrics.get("退款成功率", 0.0)),
+        "退款金额": float(refund_metrics.get("退款金额", 0.0)),
+        "剔除退款后商家实收": float(refund_metrics.get("剔除退款后商家实收", 0.0)),
+        "售后处理中金额": float(refund_metrics.get("售后处理中商家实收金额", 0.0)),
+        "确认有效商家实收": float(refund_metrics.get("确认有效商家实收", 0.0)),
+        "退款后ROI": safe_divide(refund_metrics.get("剔除退款后商家实收", 0.0), promo_spend),
+        "确认有效ROI": safe_divide(refund_metrics.get("确认有效商家实收", 0.0), promo_spend),
     }
 
     return {
@@ -498,9 +510,68 @@ def compute_kpi_assessment(
     }
 
 
+def _best_text_by_orders(df: pd.DataFrame, group_col: str, text_col: str, output_col: str) -> pd.DataFrame:
+    if df.empty or group_col not in df.columns:
+        return pd.DataFrame(columns=[group_col, output_col])
+    tmp = df.copy()
+    if text_col not in tmp.columns:
+        tmp[text_col] = ""
+    tmp[text_col] = tmp[text_col].fillna("").astype(str).str.strip()
+    order_col = "订单号" if "订单号" in tmp.columns else group_col
+    ranked = (
+        tmp.groupby([group_col, text_col], dropna=False)
+        .agg(订单数=(order_col, "count"))
+        .reset_index()
+        .sort_values([group_col, "订单数"], ascending=[True, False])
+        .drop_duplicates(subset=[group_col], keep="first")
+        [[group_col, text_col]]
+        .rename(columns={text_col: output_col})
+    )
+    return ranked
+
+
+def _add_refund_columns(out: pd.DataFrame, refund_df: pd.DataFrame, key_cols: list[str]) -> pd.DataFrame:
+    if refund_df is None or refund_df.empty:
+        for col in [
+            "支付订单数", "支付口径商家实收", "退款订单数", "退款率", "退款金额", "退款金额占比", "剔除退款后商家实收",
+            "售后处理中订单数", "售后处理中金额", "确认有效商家实收", "未发货退款订单数",
+            "未成交退款订单数", "发货后退款订单数", "发货后退款率",
+        ]:
+            out[col] = 0.0
+        return out
+    rename = {
+        "退款成功订单数": "退款订单数",
+        "退款成功率": "退款率",
+        "售后处理中商家实收金额": "售后处理中金额",
+        "商家实收金额": "支付口径商家实收",
+    }
+    keep = key_cols + [
+        "支付订单数", "商家实收金额", "退款成功订单数", "退款成功率", "退款金额", "退款金额占比", "剔除退款后商家实收",
+        "售后处理中订单数", "售后处理中商家实收金额", "确认有效商家实收", "未发货退款订单数",
+        "未成交退款订单数", "发货后退款订单数", "发货后退款率",
+    ]
+    exist = [c for c in keep if c in refund_df.columns]
+    out = out.merge(refund_df[exist].rename(columns=rename), on=key_cols, how="left")
+    for col in rename.values():
+        if col not in out.columns:
+            out[col] = 0.0
+    for col in [
+        "支付订单数", "支付口径商家实收", "退款订单数", "退款率", "退款金额", "退款金额占比", "剔除退款后商家实收",
+        "售后处理中订单数", "售后处理中金额", "确认有效商家实收", "未发货退款订单数",
+        "未成交退款订单数", "发货后退款订单数", "发货后退款率",
+    ]:
+        if col not in out.columns:
+            out[col] = 0.0
+        out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0.0)
+    return out
+
+
+def _safe_roi(numerator: float, denominator: float) -> float:
+    return safe_divide(numerator, denominator)
+
+
 def _analyze_links(orders: pd.DataFrame, promo_by_product: pd.DataFrame) -> pd.DataFrame:
-    link_title_col = "商品"
-    group_cols = ["商品id", link_title_col, "标准产品名称", "是否百补"]
+    group_cols = ["商品id"]
 
     counts = orders.groupby(group_cols, dropna=False).agg(
         有效订单数=("订单分类", lambda s: int((s == "有效").sum())),
@@ -509,7 +580,7 @@ def _analyze_links(orders: pd.DataFrame, promo_by_product: pd.DataFrame) -> pd.D
         非经营剔除订单数=("订单分类", lambda s: int((s == "非经营剔除").sum())),
     ).reset_index()
 
-    valid_orders = orders[orders["订单分类"] == "有效"]
+    valid_orders = orders[orders["订单分类"] == "有效"].copy()
     for amount_col in ["商品总价(元)", "店铺优惠折扣(元)", "平台优惠折扣(元)"]:
         if amount_col not in valid_orders.columns:
             valid_orders[amount_col] = 0.0
@@ -520,6 +591,7 @@ def _analyze_links(orders: pd.DataFrame, promo_by_product: pd.DataFrame) -> pd.D
         平台优惠折扣=("平台优惠折扣(元)", "sum"),
         用户实付=("用户实付金额(元)", "sum"),
         商家实收=("商家实收金额(元)", "sum"),
+        商品件数=("商品数量(件)", "sum"),
         产品总成本=("产品总成本", "sum"),
         快递总成本=("快递费", "sum"),
         平台扣点=("平台扣点", "sum"),
@@ -527,10 +599,13 @@ def _analyze_links(orders: pd.DataFrame, promo_by_product: pd.DataFrame) -> pd.D
     ).reset_index()
 
     base = counts.merge(amounts, on=group_cols, how="left")
-    for col in ["商品总价", "店铺优惠折扣", "平台优惠折扣", "用户实付", "商家实收", "产品总成本", "快递总成本", "平台扣点", "订单侧估算毛利"]:
-        base[col] = base[col].fillna(0.0)
+    for col in ["商品总价", "店铺优惠折扣", "平台优惠折扣", "用户实付", "商家实收", "商品件数", "产品总成本", "快递总成本", "平台扣点", "订单侧估算毛利"]:
+        base[col] = pd.to_numeric(base.get(col, 0.0), errors="coerce").fillna(0.0)
 
-    base = base.rename(columns={"商品id": "商品ID", link_title_col: "链接标题"})
+    title = _best_text_by_orders(orders, "商品id", "商品", "商品名称")
+    product = _best_text_by_orders(orders, "商品id", "标准产品名称", "标准产品名称")
+    base = base.merge(title, on="商品id", how="left").merge(product, on="商品id", how="left")
+    base = base.rename(columns={"商品id": "商品ID", "商品名称": "链接标题"})
     base["商品ID"] = base["商品ID"].astype(str)
 
     result = base.merge(promo_by_product, on="商品ID", how="left")
@@ -538,13 +613,26 @@ def _analyze_links(orders: pd.DataFrame, promo_by_product: pd.DataFrame) -> pd.D
         if col not in result.columns:
             result[col] = 0.0
         result[col] = pd.to_numeric(result[col], errors="coerce").fillna(0.0)
+    result["成交花费"] = result["推广成交花费"]
+
+    refund_by_goods = aggregate_refund_by(orders, ["商品id"]).rename(columns={"商品id": "商品ID"})
+    result = _add_refund_columns(result, refund_by_goods, ["商品ID"])
+    result["商家实收"] = np.where(result["支付口径商家实收"] > 0, result["支付口径商家实收"], result["商家实收"])
+
     result["推广结算券金额"] = result["结算券花费"]
     result["店铺设置优惠金额"] = result["店铺优惠折扣"] - result["推广结算券金额"]
     result["是否异常"] = np.where(result["店铺设置优惠金额"] < -0.01, "口径差异/退款结算差异", "否")
-    result["扣推广后贡献毛利"] = result["订单侧估算毛利"] - result["推广成交花费"]
+    result["链接校验提示"] = np.where(result["成交花费"] > result["商家实收"], "高投放/低产出链接", "")
+    result["毛利金额"] = result["订单侧估算毛利"]
+    result["扣推广后毛利"] = result["订单侧估算毛利"] - result["成交花费"]
+    result["扣推广后贡献毛利"] = result["扣推广后毛利"]
     result["经营利润"] = result["扣推广后贡献毛利"]
+    result["扣推广后利润率"] = result.apply(lambda r: safe_divide(r["扣推广后毛利"], r["商家实收"]), axis=1)
     result["商品营销总费率"] = result.apply(lambda r: safe_divide(r["商品营销总花费"], r["商家实收"]), axis=1)
     result = calc_ratio_columns(result)
+    result["ROI"] = result["实际ROI"]
+    result["退款后ROI"] = result.apply(lambda r: _safe_roi(r["剔除退款后商家实收"], r["成交花费"]), axis=1)
+    result["确认有效ROI"] = result.apply(lambda r: _safe_roi(r["确认有效商家实收"], r["成交花费"]), axis=1)
     return result.sort_values("订单侧估算毛利", ascending=False)
 
 
@@ -665,6 +753,8 @@ def _analyze_products(orders: pd.DataFrame, promo_by_product: pd.DataFrame) -> p
     promo_by_product_name = _build_product_promo(valid_orders, promo_by_product)
 
     out = counts.merge(metrics, on="标准产品名称", how="left")
+    refund_by_product = aggregate_refund_by(orders, ["标准产品名称"])
+    out = _add_refund_columns(out, refund_by_product, ["标准产品名称"])
     out = out.merge(promo_by_product_name, on="标准产品名称", how="left")
     out = out.merge(baibu_pivot, on="标准产品名称", how="left")
     out = out.rename(columns={"实际成交花费(元)": "链接推广费合计", "推广成交花费": "推广成交花费", "结算券花费": "结算券花费", "商品营销总花费": "商品营销总花费"})
@@ -688,6 +778,13 @@ def _analyze_products(orders: pd.DataFrame, promo_by_product: pd.DataFrame) -> p
         "日常商家实收",
         "百补有效订单数",
         "日常有效订单数",
+        "退款订单数",
+        "退款金额",
+        "售后处理中金额",
+        "剔除退款后商家实收",
+        "确认有效商家实收",
+        "未发货退款订单数",
+        "发货后退款订单数",
     ]:
         if col not in out.columns:
             out[col] = 0.0
@@ -696,6 +793,8 @@ def _analyze_products(orders: pd.DataFrame, promo_by_product: pd.DataFrame) -> p
     out["扣推广后贡献毛利"] = out["订单侧估算毛利"] - out["推广成交花费"]
     out["经营利润"] = out["扣推广后贡献毛利"]
     out["实际ROI"] = out.apply(lambda r: safe_divide(r["商家实收"], r["推广成交花费"]), axis=1)
+    out["退款后ROI"] = out.apply(lambda r: safe_divide(r["剔除退款后商家实收"], r["推广成交花费"]), axis=1)
+    out["确认有效ROI"] = out.apply(lambda r: safe_divide(r["确认有效商家实收"], r["推广成交花费"]), axis=1)
     out["盈亏平衡ROI"] = out.apply(lambda r: safe_divide(r["商家实收"], r["订单侧估算毛利"]), axis=1)
 
     out["单均商家实收"] = out.apply(lambda r: safe_divide(r["商家实收"], r["有效订单数"]), axis=1)

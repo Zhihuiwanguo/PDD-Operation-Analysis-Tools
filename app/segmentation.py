@@ -67,7 +67,6 @@ def segment_links(link_df: pd.DataFrame) -> pd.DataFrame:
     high_revenue_threshold = out["商家实收"].quantile(0.6) if len(out) > 1 else out["商家实收"].max()
 
     def _classify(row: pd.Series) -> pd.Series:
-        is_bb = str(row.get("是否百补", "")).strip() == "是"
         high_revenue = row["商家实收"] >= high_revenue_threshold
         roi_ok = row["实际ROI"] >= row["盈亏平衡ROI"]
         positive_contrib = row["扣推广后贡献毛利"] > 0
@@ -80,13 +79,13 @@ def segment_links(link_df: pd.DataFrame) -> pd.DataFrame:
             reasons.append("订单无效率偏高")
             advice.append("排查售后/退款原因并优化履约与客服")
 
-        if is_bb and (not positive_contrib):
-            reasons.append("百补链接亏损")
-            advice.append("执行百补控费，收紧低效投放")
+        if str(row.get("链接校验提示", "")).strip():
+            reasons.append(str(row.get("链接校验提示", "")))
+            advice.append("按商品ID口径复核投放产出，优先优化高花费低实收链接")
 
-        if (not is_bb) and positive_contrib:
-            reasons.append("日常链接贡献毛利为正")
-            advice.append("作为日常利润盘稳定投放")
+        if positive_contrib:
+            reasons.append("链接贡献毛利为正")
+            advice.append("作为利润盘稳定投放")
 
         if high_revenue and roi_ok and positive_contrib:
             layer, base_reason, base_advice, priority = "放量型", "商家实收高且ROI达标，推广后贡献毛利为正", "继续放量，优先加预算和扩词扩人群", "高"
