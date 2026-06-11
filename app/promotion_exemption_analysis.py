@@ -82,6 +82,7 @@ def clean_order_id(value: Any) -> str:
     if pd.isna(value):
         return ""
     text = str(value).strip()
+    text = text.replace("\\t", "")
     text = re.sub(r"\s+", "", text)
     text = re.sub(r"\.0$", "", text)
     return text
@@ -157,10 +158,7 @@ def _empty_exemption_orders() -> pd.DataFrame:
 
 def _prepare_exemption_base(exemption_df: pd.DataFrame) -> pd.DataFrame:
     out = _ensure_standard_columns(exemption_df.copy(), EXEMPTION_COLUMN_ALIASES)
-    out["订单编号_clean"] = out["订单编号"].astype(str).str.strip()
-    out["订单编号_clean"] = out["订单编号_clean"].str.replace(r"\s+", "", regex=True)
-    out["订单编号_clean"] = out["订单编号_clean"].str.replace(r"\.0$", "", regex=True)
-    out.loc[out["订单编号"].isna(), "订单编号_clean"] = ""
+    out["订单编号_clean"] = out["订单编号"].apply(clean_order_id)
     out["订单编号"] = out["订单编号_clean"]
     out["商品ID"] = out["商品"].map(_parse_goods_id_from_text)
     out["订单支付日期_parsed"] = out["订单支付日期"].apply(parse_pdd_exemption_date)
@@ -197,7 +195,7 @@ def parse_exemption_orders(
 
     out = _prepare_exemption_base(exemption_df)
     out = out[out["订单编号_clean"] != ""].copy()
-    out = _filter_exemptions_by_pay_date(out, date_range)
+    # 第一版只按订单明细日期筛选；豁免表不做日期筛选，避免因平台日期格式异常漏匹配。
     out = out.drop_duplicates(subset=["订单编号_clean"], keep="first").reset_index(
         drop=True
     )
@@ -361,7 +359,7 @@ def _build_exemption_debug(
             if not non_empty_base.empty
             else 0
         ),
-        "日期筛选后的豁免行数": int(len(exemptions)),
+        "用于匹配的豁免行数": int(len(exemptions)),
         "豁免订单编号样例前10个": exemption_order_sample,
         "订单明细退款订单号样例前10个": refund_order_sample,
         "两边订单号交集数量": int(len(exemption_order_set & refund_order_set)),
@@ -380,14 +378,14 @@ def build_promotion_exemption_analysis(
         return _empty_result(["请先上传拼多多推广豁免订单数据。"])
 
     orders = _prepare_orders(orders_df, date_range)
-    exemptions = parse_exemption_orders(exemption_df, date_range)
+    exemptions = parse_exemption_orders(exemption_df)
 
     if orders.empty:
         return _empty_result(["按支付时间筛选后没有可分析订单。"])
 
     if exemptions.empty:
         messages.append(
-            "豁免清单为空或按订单支付日期筛选后没有有效订单编号，所有退款成功订单都会暂按未豁免处理。"
+            "豁免清单为空或没有有效订单编号，所有退款成功订单都会暂按未豁免处理。"
         )
 
     exempt_order_set = set(exemptions["订单编号_clean"].dropna().astype(str).tolist())
@@ -395,8 +393,9 @@ def build_promotion_exemption_analysis(
 
     refund_orders = orders[_is_refund_success(orders)].copy()
     debug = _build_exemption_debug(exemption_df, exemptions, refund_orders)
-    refund_orders["已豁免"] = refund_orders["订单号_clean"].isin(exempt_order_set)
-    refund_orders["未豁免"] = ~refund_orders["已豁免"]
+    refund_orders["是否已豁免"] = refund_orders["订单号_clean"].isin(exempt_order_set)
+    refund_orders["已豁免"] = refund_orders["是否已豁免"]
+    refund_orders["未豁免"] = ~refund_orders["是否已豁免"]
     refund_orders["同商品ID是否有豁免记录"] = refund_orders["商品ID"].isin(
         exemption_goods_ids
     )

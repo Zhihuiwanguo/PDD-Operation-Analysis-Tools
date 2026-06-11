@@ -35,7 +35,7 @@ def test_parse_pdd_exemption_date_handles_excel_serial_numbers():
     assert parse_pdd_exemption_date("2026-06-01") == pd.Timestamp("2026-06-01")
 
 
-def test_exemption_matching_uses_excel_serial_pay_date_filter_and_debug_stats():
+def test_exemption_matching_uses_excel_serial_pay_date_without_filter_and_debug_stats():
     orders = pd.DataFrame(
         {
             "订单号": ["1001", "1002", "1003"],
@@ -60,14 +60,14 @@ def test_exemption_matching_uses_excel_serial_pay_date_filter_and_debug_stats():
         orders, exemptions, ("2026-06-01", "2026-06-10")
     )
 
-    assert result["overview"]["已豁免订单数"] == 2
-    assert result["overview"]["未豁免订单数"] == 1
-    assert set(result["exemption_orders"]["订单编号_clean"]) == {"1001", "1002"}
+    assert result["overview"]["已豁免订单数"] == 3
+    assert result["overview"]["未豁免订单数"] == 0
+    assert set(result["exemption_orders"]["订单编号_clean"]) == {"1001", "1002", "1003"}
     assert result["debug"]["豁免文件原始行数"] == 4
     assert result["debug"]["去掉空订单编号后的行数"] == 3
     assert result["debug"]["订单支付日期_parsed非空行数"] == 3
-    assert result["debug"]["日期筛选后的豁免行数"] == 2
-    assert result["debug"]["两边订单号交集数量"] == 2
+    assert result["debug"]["用于匹配的豁免行数"] == 3
+    assert result["debug"]["两边订单号交集数量"] == 3
 
 
 def test_build_promotion_exemption_analysis_outputs_metrics_and_categories():
@@ -123,7 +123,7 @@ def test_build_promotion_exemption_analysis_outputs_metrics_and_categories():
     }
 
 
-def test_exemption_matching_uses_clean_order_ids_and_exemption_pay_date_filter():
+def test_exemption_matching_uses_clean_order_ids_without_exemption_pay_date_filter():
     orders = pd.DataFrame(
         {
             "订单号": [" 1001\t", "1002.0", "1003", "1004"],
@@ -149,6 +149,6 @@ def test_exemption_matching_uses_clean_order_ids_and_exemption_pay_date_filter()
     )
 
     assert result["overview"]["退款成功订单数"] == 4
-    assert result["overview"]["已豁免订单数"] == 2
-    assert result["overview"]["未豁免订单数"] == 2
-    assert set(result["exemption_orders"]["订单编号_clean"]) == {"1001", "1002"}
+    assert result["overview"]["已豁免订单数"] == 3
+    assert result["overview"]["未豁免订单数"] == 1
+    assert set(result["exemption_orders"]["订单编号_clean"]) == {"1001", "1002", "1003"}
