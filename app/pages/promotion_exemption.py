@@ -75,7 +75,7 @@ def _build_file_diagnostics(
 
 
 def _render_file_diagnostics(diagnostics: dict[str, object]) -> None:
-    with st.expander("文件读取诊断", expanded=True):
+    with st.expander("文件读取诊断", expanded=False):
         st.write("订单文件名：", diagnostics.get("订单文件名", ""))
         st.write("豁免文件名：", diagnostics.get("豁免文件名", ""))
         st.write("豁免文件读取行数：", diagnostics.get("豁免文件读取行数", 0))
@@ -176,7 +176,7 @@ def render(
 
     debug = result.get("debug", {})
     if debug:
-        with st.expander("调试信息：豁免订单匹配", expanded=True):
+        with st.expander("调试信息：豁免订单匹配", expanded=False):
             debug_rows = []
             for label, value in debug.items():
                 if isinstance(value, list):
@@ -207,39 +207,69 @@ def render(
     for idx, (label, value, kind) in enumerate(cards):
         cols[idx % 3].metric(label, _metric_value(value, kind))
 
-    st.markdown("### 二、商品汇总")
-    st.dataframe(
-        _format_table(result.get("product_summary", pd.DataFrame())),
-        use_container_width=True,
+    st.info(
+        "未出现在豁免清单不等于一定是平台漏识别，可能存在非商品推广成交、部分退款、退货退款、平台数据延迟等情况。"
+        "后续如上传商品推广成交明细和售后退款明细，可进一步判断是否真正符合豁免规则。"
     )
 
-    st.markdown("### 三、订单状态汇总")
+    details = result.get("unexempted_details", pd.DataFrame())
+    suspected_details = result.get("suspected_details", pd.DataFrame())
+    product_summary = result.get("product_summary", pd.DataFrame())
+    category_summary = result.get("category_summary", pd.DataFrame())
+
+    st.markdown("### 二、未豁免订单明细")
+    st.dataframe(details, use_container_width=True)
+
+    st.markdown("### 三、判定分类汇总")
+    st.dataframe(category_summary, use_container_width=True)
+
+    st.markdown("### 四、商品维度豁免汇总")
+    st.dataframe(_format_table(product_summary), use_container_width=True)
+
+    st.markdown("### 五、订单状态汇总")
     st.dataframe(
         _format_table(result.get("status_summary", pd.DataFrame())),
         use_container_width=True,
     )
 
-    st.markdown("### 四、判定分类汇总")
-    st.dataframe(
-        result.get("category_summary", pd.DataFrame()), use_container_width=True
-    )
-
-    st.markdown("### 五、未豁免退款订单明细")
-    details = result.get("unexempted_details", pd.DataFrame())
-    st.dataframe(details, use_container_width=True)
-
-    export_payload = {
-        "未豁免退款订单明细": details,
-        "疑似应豁免但未豁免": result.get("suspected_details", pd.DataFrame()),
-        "商品汇总": result.get("product_summary", pd.DataFrame()),
-        "状态汇总": result.get("status_summary", pd.DataFrame()),
-        "判定分类汇总": result.get("category_summary", pd.DataFrame()),
-        "已解析豁免清单": result.get("exemption_orders", pd.DataFrame()),
-    }
-    st.download_button(
-        "导出推广订单豁免分析 Excel",
-        data=to_excel_bytes(export_payload),
-        file_name="推广订单豁免分析.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        key=f"{key_prefix}_download",
-    )
+    st.markdown("### 六、导出")
+    export_cols = st.columns(4)
+    export_configs = [
+        (
+            export_cols[0],
+            "导出未豁免订单明细",
+            {"未豁免订单明细": details},
+            "未豁免订单明细.xlsx",
+            f"{key_prefix}_download_unexempted_details",
+        ),
+        (
+            export_cols[1],
+            "导出疑似应豁免但未豁免订单",
+            {"疑似应豁免但未豁免订单": suspected_details},
+            "疑似应豁免但未豁免订单.xlsx",
+            f"{key_prefix}_download_suspected_details",
+        ),
+        (
+            export_cols[2],
+            "导出商品汇总",
+            {"商品维度豁免汇总": product_summary},
+            "商品维度豁免汇总.xlsx",
+            f"{key_prefix}_download_product_summary",
+        ),
+        (
+            export_cols[3],
+            "导出判定分类汇总",
+            {"判定分类汇总": category_summary},
+            "判定分类汇总.xlsx",
+            f"{key_prefix}_download_category_summary",
+        ),
+    ]
+    for col, label, payload, file_name, key in export_configs:
+        with col:
+            st.download_button(
+                label,
+                data=to_excel_bytes(payload),
+                file_name=file_name,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key=key,
+            )
