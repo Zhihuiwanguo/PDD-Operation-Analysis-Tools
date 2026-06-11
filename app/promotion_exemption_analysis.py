@@ -79,15 +79,14 @@ def _empty_result(messages: list[str] | None = None) -> dict[str, Any]:
 
 
 def clean_order_id(value: Any) -> str:
-    """清洗订单号：转字符串并移除空格、制表符等空白字符。"""
+    """清洗订单号，始终按字符串处理以避免科学计数法造成订单号丢失。"""
     if pd.isna(value):
         return ""
-    if isinstance(value, float) and value.is_integer():
-        value = int(value)
-    text = str(value).strip()
+    text = str(value)
+    text = text.replace("\t", "").replace(" ", "").strip()
     if text.endswith(".0") and re.fullmatch(r"\d+\.0", text):
         text = text[:-2]
-    return re.sub(r"\s+", "", text)
+    return text
 
 
 def _pick_column(df: pd.DataFrame, aliases: tuple[str, ...]) -> str | None:
@@ -124,10 +123,11 @@ def _parse_goods_id_from_text(value: Any) -> str:
 
 def parse_exemption_orders(exemption_df: pd.DataFrame, date_range: tuple[Any, Any] | None = None) -> pd.DataFrame:
     if exemption_df is None or exemption_df.empty:
-        return pd.DataFrame(columns=["商品", "商品ID", "订单编号", "订单支付日期", "豁免类型", "红包发放日期"])
+        return pd.DataFrame(columns=["商品", "商品ID", "订单编号", "订单编号_clean", "订单支付日期", "豁免类型", "红包发放日期"])
 
     out = _ensure_standard_columns(exemption_df.copy(), EXEMPTION_COLUMN_ALIASES)
-    out["订单编号"] = out["订单编号"].map(clean_order_id)
+    out["订单编号_clean"] = out["订单编号"].map(clean_order_id)
+    out["订单编号"] = out["订单编号_clean"]
     out["商品ID"] = out["商品"].map(_parse_goods_id_from_text)
     out["订单支付日期"] = pd.to_datetime(out["订单支付日期"], errors="coerce")
     out["红包发放日期"] = pd.to_datetime(out["红包发放日期"], errors="coerce")
@@ -137,14 +137,15 @@ def parse_exemption_orders(exemption_df: pd.DataFrame, date_range: tuple[Any, An
         end = pd.to_datetime(date_range[1]) + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
         out = out[(out["订单支付日期"] >= start) & (out["订单支付日期"] <= end)].copy()
 
-    out = out[out["订单编号"] != ""].copy()
-    out = out.drop_duplicates(subset=["订单编号"], keep="first").reset_index(drop=True)
-    return out[["商品", "商品ID", "订单编号", "订单支付日期", "豁免类型", "红包发放日期"]]
+    out = out[out["订单编号_clean"] != ""].copy()
+    out = out.drop_duplicates(subset=["订单编号_clean"], keep="first").reset_index(drop=True)
+    return out[["商品", "商品ID", "订单编号", "订单编号_clean", "订单支付日期", "豁免类型", "红包发放日期"]]
 
 
 def _prepare_orders(orders_df: pd.DataFrame, date_range: tuple[Any, Any] | None = None) -> pd.DataFrame:
     orders = _ensure_standard_columns(orders_df.copy(), ORDER_COLUMN_ALIASES)
-    orders["订单号"] = orders["订单号"].map(clean_order_id)
+    orders["订单号_clean"] = orders["订单号"].map(clean_order_id)
+    orders["订单号"] = orders["订单号_clean"]
     orders["商品ID"] = orders["商品ID"].map(clean_order_id)
     orders["支付时间"] = pd.to_datetime(orders["支付时间"], errors="coerce")
     for col in ["商品总价", "店铺优惠", "平台优惠", "用户实付金额", "商家实收金额", "商品数量"]:
@@ -157,7 +158,7 @@ def _prepare_orders(orders_df: pd.DataFrame, date_range: tuple[Any, Any] | None 
         end = pd.to_datetime(date_range[1]) + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
         orders = orders[(orders["支付时间"] >= start) & (orders["支付时间"] <= end)].copy()
 
-    return orders[orders["订单号"] != ""].copy()
+    return orders[orders["订单号_clean"] != ""].copy()
 
 
 def _is_refund_success(orders: pd.DataFrame) -> pd.Series:
@@ -226,11 +227,11 @@ def build_promotion_exemption_analysis(
     if exemptions.empty:
         messages.append("豁免清单为空或按订单支付日期筛选后没有有效订单编号，所有退款成功订单都会暂按未豁免处理。")
 
-    exemption_order_ids = set(exemptions["订单编号"].dropna().astype(str).tolist())
+    exempt_order_set = set(exemptions["订单编号_clean"].dropna().astype(str).tolist())
     exemption_goods_ids = set(exemptions["商品ID"].dropna().astype(str).tolist()) - {""}
 
     refund_orders = orders[_is_refund_success(orders)].copy()
-    refund_orders["已豁免"] = refund_orders["订单号"].isin(exemption_order_ids)
+    refund_orders["已豁免"] = refund_orders["订单号_clean"].isin(exempt_order_set)
     refund_orders["未豁免"] = ~refund_orders["已豁免"]
     refund_orders["同商品ID是否有豁免记录"] = refund_orders["商品ID"].isin(exemption_goods_ids)
     refund_orders["未豁免商家实收金额_calc"] = refund_orders["商家实收金额"].where(refund_orders["未豁免"], 0).fillna(0)
