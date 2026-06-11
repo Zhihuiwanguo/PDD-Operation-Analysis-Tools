@@ -26,7 +26,11 @@ def _format_table(df: pd.DataFrame) -> pd.DataFrame:
         return df
     out = df.copy()
     if "豁免覆盖率" in out.columns:
-        out["豁免覆盖率"] = pd.to_numeric(out["豁免覆盖率"], errors="coerce").fillna(0).map(lambda x: f"{x:.2%}")
+        out["豁免覆盖率"] = (
+            pd.to_numeric(out["豁免覆盖率"], errors="coerce")
+            .fillna(0)
+            .map(lambda x: f"{x:.2%}")
+        )
     return out
 
 
@@ -35,41 +39,87 @@ def _load_exemption_table(uploaded_exemption_file) -> pd.DataFrame:
     return clean_columns(pd.read_excel(uploaded_exemption_file, dtype=str))
 
 
-def _render_uploads(key_prefix: str) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def _render_uploads(
+    key_prefix: str,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     st.markdown("### 数据上传")
     c1, c2 = st.columns(2)
     with c1:
-        order_file = st.file_uploader("1. 拼多多订单明细（CSV / Excel）", type=UPLOAD_FILE_TYPES, key=f"{key_prefix}_orders")
-        promo_deal_file = st.file_uploader("3. 商品推广成交明细（选传，后续增强使用）", type=UPLOAD_FILE_TYPES, key=f"{key_prefix}_promo_deal")
+        order_file = st.file_uploader(
+            "1. 拼多多订单明细（CSV / Excel）",
+            type=UPLOAD_FILE_TYPES,
+            key=f"{key_prefix}_orders",
+        )
+        promo_deal_file = st.file_uploader(
+            "3. 商品推广成交明细（选传，后续增强使用）",
+            type=UPLOAD_FILE_TYPES,
+            key=f"{key_prefix}_promo_deal",
+        )
     with c2:
-        exemption_file = st.file_uploader("2. 拼多多推广豁免订单数据（Excel）", type=["xls", "xlsx"], key=f"{key_prefix}_exemption")
-        refund_file = st.file_uploader("4. 售后退款明细（选传，后续增强使用）", type=UPLOAD_FILE_TYPES, key=f"{key_prefix}_refund")
+        exemption_file = st.file_uploader(
+            "2. 拼多多推广豁免订单数据（Excel）",
+            type=["xls", "xlsx"],
+            key=f"{key_prefix}_exemption",
+        )
+        refund_file = st.file_uploader(
+            "4. 售后退款明细（选传，后续增强使用）",
+            type=UPLOAD_FILE_TYPES,
+            key=f"{key_prefix}_refund",
+        )
 
-    orders = load_table(order_file, order_file.name, key="orders") if order_file is not None else pd.DataFrame()
-    exemptions = _load_exemption_table(exemption_file) if exemption_file is not None else pd.DataFrame()
-    promo_deal = load_table(promo_deal_file, promo_deal_file.name) if promo_deal_file is not None else pd.DataFrame()
-    refund = load_table(refund_file, refund_file.name) if refund_file is not None else pd.DataFrame()
+    orders = (
+        load_table(order_file, order_file.name, key="orders")
+        if order_file is not None
+        else pd.DataFrame()
+    )
+    exemptions = (
+        _load_exemption_table(exemption_file)
+        if exemption_file is not None
+        else pd.DataFrame()
+    )
+    promo_deal = (
+        load_table(promo_deal_file, promo_deal_file.name)
+        if promo_deal_file is not None
+        else pd.DataFrame()
+    )
+    refund = (
+        load_table(refund_file, refund_file.name)
+        if refund_file is not None
+        else pd.DataFrame()
+    )
     return orders, exemptions, promo_deal, refund
 
 
-def render(default_orders: pd.DataFrame | None = None, key_prefix: str = "promotion_exemption") -> None:
+def render(
+    default_orders: pd.DataFrame | None = None, key_prefix: str = "promotion_exemption"
+) -> None:
     st.subheader("推广订单豁免分析")
-    st.caption("用于识别退款成功但未出现在推广豁免清单中的订单，并按商品、订单状态、判定分类汇总。")
+    st.caption(
+        "用于识别退款成功但未出现在推广豁免清单中的订单，并按商品、订单状态、判定分类汇总。"
+    )
 
     use_current_orders = False
     if default_orders is not None and not default_orders.empty:
-        use_current_orders = st.checkbox("使用当前经营分析已上传的订单明细", value=True, key=f"{key_prefix}_use_current_orders")
+        use_current_orders = st.checkbox(
+            "使用当前经营分析已上传的订单明细",
+            value=True,
+            key=f"{key_prefix}_use_current_orders",
+        )
 
     orders, exemptions, promo_deal, refund = _render_uploads(key_prefix)
     if use_current_orders and orders.empty:
         orders = default_orders.copy()
 
     if not promo_deal.empty or not refund.empty:
-        st.info("已接收选传文件。当前版本先完成豁免匹配与疑似漏识别分析，商品推广成交明细和售后退款明细将用于后续增强规则判断。")
+        st.info(
+            "已接收选传文件。当前版本先完成豁免匹配与疑似漏识别分析，商品推广成交明细和售后退款明细将用于后续增强规则判断。"
+        )
 
     date_range = None
     if not orders.empty:
-        pay_dates = pd.to_datetime(orders.get("支付时间", pd.Series(dtype=str)), errors="coerce").dropna()
+        pay_dates = pd.to_datetime(
+            orders.get("支付时间", pd.Series(dtype=str)), errors="coerce"
+        ).dropna()
         if not pay_dates.empty:
             date_range = st.date_input(
                 "分析期间（按订单明细中的支付时间筛选；豁免清单按订单支付日期同步筛选）",
@@ -81,10 +131,26 @@ def render(default_orders: pd.DataFrame | None = None, key_prefix: str = "promot
         st.warning("请上传拼多多订单明细和拼多多推广豁免订单数据后开始分析。")
         return
 
-    result = build_promotion_exemption_analysis(orders, exemptions, date_range if isinstance(date_range, (tuple, list)) else None)
+    result = build_promotion_exemption_analysis(
+        orders,
+        exemptions,
+        date_range if isinstance(date_range, (tuple, list)) else None,
+    )
 
     for msg in result.get("messages", []):
         st.warning(msg)
+
+    debug = result.get("debug", {})
+    if debug:
+        with st.expander("调试信息：豁免订单匹配", expanded=True):
+            debug_rows = []
+            for label, value in debug.items():
+                if isinstance(value, list):
+                    value = "、".join(value)
+                debug_rows.append({"指标": label, "值": value})
+            st.dataframe(
+                pd.DataFrame(debug_rows), use_container_width=True, hide_index=True
+            )
 
     overview = result.get("overview", {})
     st.markdown("### 一、总览指标")
@@ -96,7 +162,11 @@ def render(default_orders: pd.DataFrame | None = None, key_prefix: str = "promot
         ("豁免覆盖率", overview.get("豁免覆盖率", 0), "pct"),
         ("已豁免商家实收金额", overview.get("已豁免商家实收金额", 0), "money"),
         ("未豁免商家实收金额", overview.get("未豁免商家实收金额", 0), "money"),
-        ("疑似应豁免但未豁免订单数", overview.get("疑似应豁免但未豁免订单数", 0), "int"),
+        (
+            "疑似应豁免但未豁免订单数",
+            overview.get("疑似应豁免但未豁免订单数", 0),
+            "int",
+        ),
         ("疑似应豁免但未豁免金额", overview.get("疑似应豁免但未豁免金额", 0), "money"),
     ]
     cols = st.columns(3)
@@ -104,13 +174,21 @@ def render(default_orders: pd.DataFrame | None = None, key_prefix: str = "promot
         cols[idx % 3].metric(label, _metric_value(value, kind))
 
     st.markdown("### 二、商品汇总")
-    st.dataframe(_format_table(result.get("product_summary", pd.DataFrame())), use_container_width=True)
+    st.dataframe(
+        _format_table(result.get("product_summary", pd.DataFrame())),
+        use_container_width=True,
+    )
 
     st.markdown("### 三、订单状态汇总")
-    st.dataframe(_format_table(result.get("status_summary", pd.DataFrame())), use_container_width=True)
+    st.dataframe(
+        _format_table(result.get("status_summary", pd.DataFrame())),
+        use_container_width=True,
+    )
 
     st.markdown("### 四、判定分类汇总")
-    st.dataframe(result.get("category_summary", pd.DataFrame()), use_container_width=True)
+    st.dataframe(
+        result.get("category_summary", pd.DataFrame()), use_container_width=True
+    )
 
     st.markdown("### 五、未豁免退款订单明细")
     details = result.get("unexempted_details", pd.DataFrame())

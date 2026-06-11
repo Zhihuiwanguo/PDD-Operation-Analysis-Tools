@@ -4,6 +4,7 @@ from app.promotion_exemption_analysis import (
     build_promotion_exemption_analysis,
     clean_order_id,
     parse_exemption_orders,
+    parse_pdd_exemption_date,
 )
 
 
@@ -28,6 +29,47 @@ def test_parse_exemption_orders_extracts_goods_id_and_deduplicates():
     assert out.loc[0, "订单编号"] == "A001"
 
 
+def test_parse_pdd_exemption_date_handles_excel_serial_numbers():
+    assert parse_pdd_exemption_date("46174.0") == pd.Timestamp("2026-06-01")
+    assert parse_pdd_exemption_date("46183.0") == pd.Timestamp("2026-06-10")
+    assert parse_pdd_exemption_date("2026-06-01") == pd.Timestamp("2026-06-01")
+
+
+def test_exemption_matching_uses_excel_serial_pay_date_filter_and_debug_stats():
+    orders = pd.DataFrame(
+        {
+            "订单号": ["1001", "1002", "1003"],
+            "支付时间": ["2026-06-01", "2026-06-10", "2026-06-10"],
+            "商品id": ["G1", "G1", "G1"],
+            "订单状态": ["未发货退款成功"] * 3,
+            "售后状态": ["退款成功"] * 3,
+            "商家实收金额(元)": [10, 20, 30],
+        }
+    )
+    exemptions = pd.DataFrame(
+        {
+            "商品": ["商品 ID：G1", "商品 ID：G1", "商品 ID：G1", "商品 ID：G1"],
+            "订单编号": ["1001.0", " 1002 ", "1003", ""],
+            "订单支付日期": ["46174.0", "46183.0", "46184.0", "46174.0"],
+            "豁免类型": ["退款豁免"] * 4,
+            "红包发放日期": ["2026-06-02"] * 4,
+        }
+    )
+
+    result = build_promotion_exemption_analysis(
+        orders, exemptions, ("2026-06-01", "2026-06-10")
+    )
+
+    assert result["overview"]["已豁免订单数"] == 2
+    assert result["overview"]["未豁免订单数"] == 1
+    assert set(result["exemption_orders"]["订单编号_clean"]) == {"1001", "1002"}
+    assert result["debug"]["豁免文件原始行数"] == 4
+    assert result["debug"]["去掉空订单编号后的行数"] == 3
+    assert result["debug"]["订单支付日期_parsed非空行数"] == 3
+    assert result["debug"]["日期筛选后的豁免行数"] == 2
+    assert result["debug"]["两边订单号交集数量"] == 2
+
+
 def test_build_promotion_exemption_analysis_outputs_metrics_and_categories():
     orders = pd.DataFrame(
         {
@@ -37,7 +79,13 @@ def test_build_promotion_exemption_analysis_outputs_metrics_and_categories():
             "商品": ["商品1", "商品1", "商品2", "商品3", "商品1"],
             "商品规格": ["规格"] * 5,
             "商品数量(件)": [1] * 5,
-            "订单状态": ["未发货退款成功", "未发货退款成功", "已发货退款成功", "已收货退款成功", "已支付"],
+            "订单状态": [
+                "未发货退款成功",
+                "未发货退款成功",
+                "已发货退款成功",
+                "已收货退款成功",
+                "已支付",
+            ],
             "售后状态": ["退款成功", "退款成功", "", "", ""],
             "商品总价(元)": [10, 20, 30, 40, 50],
             "店铺优惠折扣(元)": [0] * 5,
@@ -59,7 +107,9 @@ def test_build_promotion_exemption_analysis_outputs_metrics_and_categories():
             "红包发放日期": ["2026-06-02"],
         }
     )
-    result = build_promotion_exemption_analysis(orders, exemptions, ("2026-06-01", "2026-06-01"))
+    result = build_promotion_exemption_analysis(
+        orders, exemptions, ("2026-06-01", "2026-06-01")
+    )
 
     assert result["overview"]["支付订单数"] == 5
     assert result["overview"]["退款成功订单数"] == 4
@@ -94,7 +144,9 @@ def test_exemption_matching_uses_clean_order_ids_and_exemption_pay_date_filter()
         }
     )
 
-    result = build_promotion_exemption_analysis(orders, exemptions, ("2026-06-01", "2026-06-10"))
+    result = build_promotion_exemption_analysis(
+        orders, exemptions, ("2026-06-01", "2026-06-10")
+    )
 
     assert result["overview"]["退款成功订单数"] == 4
     assert result["overview"]["已豁免订单数"] == 2
