@@ -41,6 +41,15 @@ EXEMPTION_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     "红包发放日期": ("红包发放日期", "红包发放时间"),
 }
 
+UNEXEMPTED_REASON_CATEGORIES = [
+    "疑似应豁免但未豁免",
+    "发货后退款未豁免",
+    "收货后退款未豁免",
+    "商品ID在豁免清单无记录",
+    "0元/异常订单",
+]
+
+
 DETAIL_COLUMNS = [
     "订单号",
     "支付时间",
@@ -262,6 +271,12 @@ def _is_refund_success(orders: pd.DataFrame) -> pd.Series:
     return after_sale.eq("退款成功") | status.str.contains("退款成功", na=False)
 
 
+def _has_non_empty_value(value: Any) -> bool:
+    if pd.isna(value):
+        return False
+    return str(value).strip() not in ["", "-", "nan", "None"]
+
+
 def _classify_unexempted(row: pd.Series) -> str:
     amount = row.get("商家实收金额")
     if pd.isna(amount) or float(amount) <= 0:
@@ -269,18 +284,20 @@ def _classify_unexempted(row: pd.Series) -> str:
 
     status = str(row.get("订单状态", ""))
     has_goods_exemption = bool(row.get("同商品ID是否有豁免记录", False))
+    has_ship_info = _has_non_empty_value(row.get("发货时间")) or _has_non_empty_value(
+        row.get("快递单号")
+    )
+    has_receive_info = _has_non_empty_value(row.get("确认收货时间"))
 
-    if "已收货退款成功" in status:
+    if "已收货" in status or has_receive_info:
         return "收货后退款未豁免"
-    if "已发货退款成功" in status:
+    if "已发货" in status or has_ship_info:
         return "发货后退款未豁免"
+    if "未发货退款成功" in status and has_goods_exemption:
+        return "疑似应豁免但未豁免"
     if not has_goods_exemption:
         return "商品ID在豁免清单无记录"
-    if "未发货退款成功" in status:
-        return "疑似应豁免但未出现在清单"
-    return (
-        "疑似应豁免但未出现在清单" if has_goods_exemption else "商品ID在豁免清单无记录"
-    )
+    return "疑似应豁免但未豁免"
 
 
 def _summarize_by_group(
@@ -417,7 +434,7 @@ def build_promotion_exemption_analysis(
         if col not in details.columns:
             details[col] = pd.NA
     details = details[DETAIL_COLUMNS]
-    suspected = details[details["判定分类"] == "疑似应豁免但未出现在清单"].copy()
+    suspected = details[details["判定分类"] == "疑似应豁免但未豁免"].copy()
 
     paid_order_count = int(orders["订单号"].nunique())
     refund_success_count = int(refund_orders["订单号"].nunique())
@@ -459,7 +476,21 @@ def build_promotion_exemption_analysis(
             .first()
             .reset_index()
         )
+        exempted_amounts = (
+            refund_orders.assign(
+                已豁免商家实收金额_calc=refund_orders["商家实收金额"]
+                .where(refund_orders["已豁免"], 0)
+                .fillna(0)
+            )
+            .groupby("商品ID", dropna=False)["已豁免商家实收金额_calc"]
+            .sum()
+            .reset_index()
+            .rename(columns={"已豁免商家实收金额_calc": "已豁免商家实收金额"})
+        )
         product_summary = product_summary.merge(names, on="商品ID", how="left")
+        product_summary = product_summary.merge(
+            exempted_amounts, on="商品ID", how="left"
+        )
         cols = [
             "商品ID",
             "商品名称",
@@ -467,6 +498,7 @@ def build_promotion_exemption_analysis(
             "已豁免订单数",
             "未豁免订单数",
             "豁免覆盖率",
+            "已豁免商家实收金额",
             "未豁免商家实收金额",
         ]
         product_summary = product_summary[
@@ -477,7 +509,11 @@ def build_promotion_exemption_analysis(
 
     if details.empty:
         category_summary = pd.DataFrame(
-            columns=["判定分类", "未豁免订单数", "未豁免商家实收金额"]
+            {
+                "判定分类": UNEXEMPTED_REASON_CATEGORIES,
+                "未豁免订单数": 0,
+                "未豁免商家实收金额": 0.0,
+            }
         )
     else:
         category_summary = (
@@ -492,13 +528,13 @@ def build_promotion_exemption_analysis(
                 未豁免商家实收金额=("商家实收金额", "sum"),
             )
             .reset_index()
-            .sort_values("未豁免订单数", ascending=False)
         )
-
-    messages.append(
-        "提示：未出现在豁免清单不等于一定是平台漏识别，可能存在非商品推广成交、部分退款、退货退款、平台数据延迟等情况。"
-        "若上传商品推广成交明细和售后退款明细，后续可进一步判断是否真正符合豁免规则。"
-    )
+        category_summary = (
+            pd.DataFrame({"判定分类": UNEXEMPTED_REASON_CATEGORIES})
+            .merge(category_summary, on="判定分类", how="left")
+            .fillna({"未豁免订单数": 0, "未豁免商家实收金额": 0.0})
+        )
+        category_summary["未豁免订单数"] = category_summary["未豁免订单数"].astype(int)
 
     return {
         "messages": messages,

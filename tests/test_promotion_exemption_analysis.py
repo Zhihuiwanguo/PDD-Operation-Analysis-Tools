@@ -117,7 +117,7 @@ def test_build_promotion_exemption_analysis_outputs_metrics_and_categories():
     assert result["overview"]["未豁免订单数"] == 3
     assert result["overview"]["疑似应豁免但未豁免订单数"] == 1
     assert set(result["unexempted_details"]["判定分类"]) == {
-        "疑似应豁免但未出现在清单",
+        "疑似应豁免但未豁免",
         "发货后退款未豁免",
         "收货后退款未豁免",
     }
@@ -152,3 +152,50 @@ def test_exemption_matching_uses_clean_order_ids_without_exemption_pay_date_filt
     assert result["overview"]["已豁免订单数"] == 3
     assert result["overview"]["未豁免订单数"] == 1
     assert set(result["exemption_orders"]["订单编号_clean"]) == {"1001", "1002", "1003"}
+
+
+def test_unexempted_reason_classification_uses_goods_history_shipping_receipt_and_amount():
+    orders = pd.DataFrame(
+        {
+            "订单号": ["A001", "A002", "A003", "A004", "A005"],
+            "支付时间": ["2026-06-01"] * 5,
+            "商品id": ["G1", "G1", "G2", "G3", "G1"],
+            "订单状态": [
+                "未发货退款成功",
+                "退款成功",
+                "退款成功",
+                "退款成功",
+                "未发货退款成功",
+            ],
+            "售后状态": ["退款成功"] * 5,
+            "商家实收金额(元)": [10, 20, 30, 40, 0],
+            "发货时间": ["", "2026-06-02", "", "", ""],
+            "确认收货时间": ["", "", "2026-06-05", "", ""],
+            "快递单号": ["", "", "", "", ""],
+        }
+    )
+    exemptions = pd.DataFrame(
+        {
+            "商品": ["商品 ID：G1"],
+            "订单编号": ["EXEMPTED_OTHER_ORDER"],
+            "订单支付日期": ["2026-06-01"],
+            "豁免类型": ["退款豁免"],
+            "红包发放日期": ["2026-06-02"],
+        }
+    )
+
+    result = build_promotion_exemption_analysis(orders, exemptions)
+    categories = dict(
+        zip(
+            result["unexempted_details"]["订单号"],
+            result["unexempted_details"]["判定分类"],
+        )
+    )
+
+    assert categories == {
+        "A001": "疑似应豁免但未豁免",
+        "A002": "发货后退款未豁免",
+        "A003": "收货后退款未豁免",
+        "A004": "商品ID在豁免清单无记录",
+        "A005": "0元/异常订单",
+    }
