@@ -8,6 +8,7 @@ import streamlit as st
 from app.data_loader import load_table
 from app.exporters import to_excel_bytes
 from app.promotion_exemption_analysis import build_promotion_exemption_analysis
+from app.utils import clean_columns
 
 UPLOAD_FILE_TYPES = ["csv", "xls", "xlsx"]
 
@@ -29,6 +30,11 @@ def _format_table(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _load_exemption_table(uploaded_exemption_file) -> pd.DataFrame:
+    # 豁免订单号必须以字符串读取，避免长订单号被 Excel 解析为数字或科学计数法。
+    return clean_columns(pd.read_excel(uploaded_exemption_file, dtype=str))
+
+
 def _render_uploads(key_prefix: str) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     st.markdown("### 数据上传")
     c1, c2 = st.columns(2)
@@ -40,7 +46,7 @@ def _render_uploads(key_prefix: str) -> tuple[pd.DataFrame, pd.DataFrame, pd.Dat
         refund_file = st.file_uploader("4. 售后退款明细（选传，后续增强使用）", type=UPLOAD_FILE_TYPES, key=f"{key_prefix}_refund")
 
     orders = load_table(order_file, order_file.name, key="orders") if order_file is not None else pd.DataFrame()
-    exemptions = load_table(exemption_file, exemption_file.name) if exemption_file is not None else pd.DataFrame()
+    exemptions = _load_exemption_table(exemption_file) if exemption_file is not None else pd.DataFrame()
     promo_deal = load_table(promo_deal_file, promo_deal_file.name) if promo_deal_file is not None else pd.DataFrame()
     refund = load_table(refund_file, refund_file.name) if refund_file is not None else pd.DataFrame()
     return orders, exemptions, promo_deal, refund
