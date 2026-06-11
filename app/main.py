@@ -35,6 +35,7 @@ from app.pages import (
     overview,
     products,
     promotion,
+    promotion_exemption,
     price_chain,
     refund_after_sale,
     segmentation,
@@ -234,7 +235,10 @@ def _render_current_data_summary(ctx: dict) -> None:
 
 
 def main() -> None:
-    mode = st.radio("分析模式", ["单次上传分析", "历史数据分析 V2（周期覆盖）", "旧历史数据库分析（停用）"], index=0)
+    mode = st.radio("分析模式", ["单次上传分析", "推广订单豁免分析", "历史数据分析 V2（周期覆盖）", "旧历史数据库分析（停用）"], index=0)
+    if mode == "推广订单豁免分析":
+        promotion_exemption.render(key_prefix="standalone_promotion_exemption")
+        return
     if mode == "历史数据分析 V2（周期覆盖）":
         history_v2.render()
         return
@@ -356,7 +360,7 @@ def main() -> None:
             + q2_result["经营建议"]
         )
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13, tab14 = st.tabs(
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13, tab14, tab15 = st.tabs(
         [
             "数据质量检查",
             "经营分层",
@@ -367,6 +371,7 @@ def main() -> None:
             "规格分析",
             "百补 vs 日常",
             "推广分析",
+            "推广订单豁免分析",
             "价格链路",
             "经营异常",
             "异常清单",
@@ -403,19 +408,22 @@ def main() -> None:
         promotion.render(ctx["promotion_analysis"])
 
     with tab10:
-        price_chain.render(ctx.get("price_chain", pd.DataFrame()))
+        promotion_exemption.render(default_orders=ctx.get("orders_enriched", pd.DataFrame()), key_prefix="tab_promotion_exemption")
 
     with tab11:
-        business_alerts.render(ctx["business_alerts"])
+        price_chain.render(ctx.get("price_chain", pd.DataFrame()))
 
     with tab12:
+        business_alerts.render(ctx["business_alerts"])
+
+    with tab13:
         exceptions.render(ctx["exceptions"])
         exceptions.render_mapping_coverage(ctx.get("mapping_coverage", pd.DataFrame()))
 
-    with tab13:
+    with tab14:
         kpi_assessment.render(q2_result)
 
-    with tab14:
+    with tab15:
         ai_decision.render(ctx=ctx, q2_result=q2_result, notes=get_notes()[:10])
 
 
