@@ -21,6 +21,14 @@ from app.refund_analysis import (
 )
 from app.utils import safe_divide
 
+SHOP_DISCOUNT_ALIASES = ("店铺优惠折扣(元)", "店铺优惠金额(元)", "商家优惠金额(元)")
+PLATFORM_DISCOUNT_ALIASES = ("平台优惠折扣(元)", "平台优惠金额(元)")
+
+
+def _clean_numeric_series(series: pd.Series) -> pd.Series:
+    cleaned = series.astype(str).str.replace(",", "", regex=False).str.strip().replace({"": np.nan, "--": np.nan, "-": np.nan, "nan": np.nan, "None": np.nan})
+    return pd.to_numeric(cleaned, errors="coerce").fillna(0.0)
+
 
 def _copy_alias_column(df: pd.DataFrame, canonical: str, aliases: tuple[str, ...]) -> pd.DataFrame:
     """按优先级把历史字段名复制到系统内部标准字段。"""
@@ -39,6 +47,8 @@ def _ensure_order_aliases(orders: pd.DataFrame) -> pd.DataFrame:
     orders = _copy_alias_column(orders, "用户实付金额(元)", USER_PAY_ALIASES)
     orders = _copy_alias_column(orders, "商家实收金额(元)", MERCHANT_INCOME_ALIASES)
     orders = _copy_alias_column(orders, "商品数量(件)", GOODS_QTY_ALIASES)
+    orders = _copy_alias_column(orders, "店铺优惠折扣(元)", SHOP_DISCOUNT_ALIASES)
+    orders = _copy_alias_column(orders, "平台优惠折扣(元)", PLATFORM_DISCOUNT_ALIASES)
     if "商品" not in orders.columns:
         name_col = pick_alias(orders, ("商品名称", "商品标题", "链接标题"))
         orders["商品"] = orders[name_col] if name_col else ""
@@ -231,7 +241,7 @@ def prepare_enriched_orders(
     for col in ["商品总价(元)", "用户实付金额(元)", "商家实收金额(元)", "产品总成本", "快递费", "商品数量(件)"]:
         if col not in orders.columns:
             orders[col] = 0
-        orders[col] = pd.to_numeric(orders[col], errors="coerce").fillna(0)
+        orders[col] = _clean_numeric_series(orders[col])
 
     refund_fields, _refund_messages = normalize_order_refund_fields(orders)
     for col in [
@@ -262,6 +272,10 @@ def prepare_enriched_orders(
         orders["商家实收金额(元)"] * CONFIG.business_rules.bb_platform_fee_rate,
         orders["用户实付金额(元)"] * CONFIG.business_rules.normal_platform_fee_rate,
     )
+    orders["产品毛利额"] = orders["商家实收金额(元)"] - orders["产品总成本"]
+    orders["产品毛利率"] = orders.apply(lambda r: safe_divide(r["产品毛利额"], r["商家实收金额(元)"]), axis=1)
+    orders["扣快递费毛利额"] = orders["商家实收金额(元)"] - orders["产品总成本"] - orders["快递费"]
+    orders["扣快递费毛利率"] = orders.apply(lambda r: safe_divide(r["扣快递费毛利额"], r["商家实收金额(元)"]), axis=1)
     orders["订单侧估算毛利"] = (
         orders["商家实收金额(元)"] - orders["产品总成本"] - orders["快递费"] - orders["平台扣点"]
     )

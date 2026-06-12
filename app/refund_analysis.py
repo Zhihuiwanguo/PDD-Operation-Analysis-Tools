@@ -15,8 +15,8 @@ ORDER_STATUS_ALIASES = ("订单状态", "订单状态描述")
 AFTER_SALE_STATUS_ALIASES = ("售后状态", "退款状态", "售后/退款状态")
 SHIP_STATUS_ALIASES = ("发货状态", "物流状态", "配送状态")
 GOODS_PRICE_ALIASES = ("商品总价(元)", "商品总价", "商品金额(元)", "商品金额")
-USER_PAY_ALIASES = ("用户实付金额(元)", "用户实付金额", "用户实付")
-MERCHANT_INCOME_ALIASES = ("商家实收金额(元)", "商家实收金额", "商家实收")
+USER_PAY_ALIASES = ("用户实付金额(元)", "消费者实付金额(元)", "实付金额(元)", "支付金额(元)", "用户实付金额", "用户实付")
+MERCHANT_INCOME_ALIASES = ("商家实收金额(元)", "商家实收(元)", "商家实收金额", "商家实际收入(元)", "商家实收")
 GOODS_QTY_ALIASES = ("商品数量(件)", "商品数量", "数量", "件数")
 PRODUCT_NAME_ALIASES = ("标准产品名称", "产品名称")
 
@@ -53,7 +53,8 @@ def _text(df: pd.DataFrame, col: str | None) -> pd.Series:
 def _num(df: pd.DataFrame, col: str | None) -> pd.Series:
     if col is None or col not in df.columns:
         return pd.Series(0.0, index=df.index, dtype="float64")
-    return pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+    cleaned = df[col].astype(str).str.replace(",", "", regex=False).str.strip().replace({"": np.nan, "--": np.nan, "-": np.nan, "nan": np.nan, "None": np.nan})
+    return pd.to_numeric(cleaned, errors="coerce").fillna(0.0)
 
 
 def _contains_any(series: pd.Series, keywords: tuple[str, ...]) -> pd.Series:
