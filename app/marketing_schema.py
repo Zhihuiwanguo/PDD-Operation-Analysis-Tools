@@ -16,15 +16,19 @@ DATE_ALIASES = ("日期", "统计日期", "统计日期文本", "时间", "推�
 SHOP_ALIASES = ("店铺名称", "店铺", "shop_name")
 GOODS_ID_ALIASES = ("商品ID", "商品id", "商品 Id", "goods_id")
 GOODS_NAME_ALIASES = ("商品名称", "链接标题", "商品", "计划名称", "goods_name")
-OLD_PROMO_SPEND_ALIASES = ("成交花费", "实际成交花费(元)", "实际成交花费", "花费(元)", "成交花费(元)", "成交花费（元）", "花费", "推广花费", "消耗", "推广消耗", "实际消耗")
-NEW_PROMO_SPEND_ALIASES = ("推广成交花费", "推广成交花费(元)", "推广成交花费（元）")
-COUPON_SPEND_ALIASES = ("结算券花费", "结算券花费(元)", "结算券花费（元）")
+OLD_PROMO_SPEND_ALIASES = ("成交花费", "成交花费(元)", "实际成交花费(元)", "实际成交花费", "推广成交花费(元)", "成交营销花费", "成交营销花费(元)", "总营销花费", "总营销花费(元)", "花费(元)", "成交花费（元）", "花费", "推广花费", "消耗", "推广消耗", "实际消耗")
+NEW_PROMO_SPEND_ALIASES = ("推广成交花费", "推广成交花费(元)", "推广成交花费（元）", "实际成交花费(元)", "成交花费", "成交花费(元)")
+COUPON_SPEND_ALIASES = ("推广结算券金额(元)", "推广结算券优惠金额(元)", "结算券优惠金额(元)", "结算券金额(元)", "推广结算券花费(元)", "成交订单结算券金额(元)", "店铺优惠-推广结算券金额(元)", "结算券花费", "结算券花费(元)", "结算券花费（元）")
 TOTAL_SPEND_ALIASES = ("成交营销花费", "成交营销花费(元)", "总营销花费", "总营销花费(元)", "商品营销总花费")
-AD_AMOUNT_ALIASES = ("交易额", "交易额(元)", "实际成交金额", "结算金额", "结算金额(元)")
+AD_AMOUNT_ALIASES = ("推广成交金额", "推广成交金额(元)", "成交金额", "成交金额(元)", "交易额", "交易额(元)", "实际成交金额", "结算金额", "结算金额(元)")
 AD_NET_AMOUNT_ALIASES = ("净交易额", "净交易额(元)", "净交易额（元）")
 OLD_ROI_ALIASES = ("ROI", "投产比", "旧口径实际净推广投产比")
 NET_ROI_ALIASES = ("实际净投产比", "净投产比")
 SETTLEMENT_ROI_ALIASES = ("结算投产比",)
+IMPRESSION_ALIASES = ("曝光", "曝光量", "展现", "展现量")
+CLICK_ALIASES = ("点击", "点击量")
+ORDER_COUNT_ALIASES = ("成交订单数", "推广订单数", "订单数")
+DEAL_QTY_ALIASES = ("成交件数", "推广成交件数", "成交商品件数", "商品件数")
 _TOTAL_ROW_TOKENS = {"总计", "合计", "汇总", "全部"}
 
 
@@ -44,7 +48,8 @@ def _pick(df: pd.DataFrame, aliases: tuple[str, ...]) -> str | None:
 def _num(df: pd.DataFrame, col: str | None, default: float = 0.0) -> pd.Series:
     if col is None or col not in df.columns:
         return pd.Series(default, index=df.index, dtype="float64")
-    return pd.to_numeric(df[col], errors="coerce").fillna(default)
+    cleaned = df[col].astype(str).str.replace(",", "", regex=False).str.strip().replace({"": np.nan, "--": np.nan, "-": np.nan, "nan": np.nan, "None": np.nan})
+    return pd.to_numeric(cleaned, errors="coerce").fillna(default)
 
 
 def _text(df: pd.DataFrame, col: str | None) -> pd.Series:
@@ -86,7 +91,7 @@ def standardize_promotion_table(promo_df: pd.DataFrame | None) -> pd.DataFrame:
             "date", "shop_name", "goods_id", "goods_name", "promo_spend",
             "settlement_coupon_spend", "marketing_total_spend", "ad_transaction_amount",
             "ad_net_transaction_amount", "old_roi", "net_roi", "settlement_roi", "data_version",
-            "口径提示", "总营销花费校验差异", "is_total_row",
+            "口径提示", "总营销花费校验差异", "is_total_row", "impressions", "clicks", "order_count", "deal_qty",
         ])
 
     raw = promo_df.copy()
@@ -124,6 +129,10 @@ def standardize_promotion_table(promo_df: pd.DataFrame | None) -> pd.DataFrame:
     out["old_roi"] = _num(raw, _pick(raw, OLD_ROI_ALIASES), np.nan)
     out["net_roi"] = _num(raw, _pick(raw, NET_ROI_ALIASES), np.nan)
     out["settlement_roi"] = _num(raw, _pick(raw, SETTLEMENT_ROI_ALIASES), np.nan)
+    out["impressions"] = _num(raw, _pick(raw, IMPRESSION_ALIASES))
+    out["clicks"] = _num(raw, _pick(raw, CLICK_ALIASES))
+    out["order_count"] = _num(raw, _pick(raw, ORDER_COUNT_ALIASES))
+    out["deal_qty"] = _num(raw, _pick(raw, DEAL_QTY_ALIASES))
     out["data_version"] = np.where(is_new, NEW_VERSION, OLD_VERSION)
     out["口径提示"] = np.where(is_new, "2026-06-02 后商品营销口径", "2026-06-01 及以前旧推广口径")
     out["is_total_row"] = is_total
@@ -131,7 +140,7 @@ def standardize_promotion_table(promo_df: pd.DataFrame | None) -> pd.DataFrame:
     provided_total = _num(raw, total_col, np.nan)
     out["总营销花费校验差异"] = provided_total - out["marketing_total_spend"]
     out = out[~out["is_total_row"]].copy()
-    for col in ["promo_spend", "settlement_coupon_spend", "marketing_total_spend", "ad_transaction_amount", "ad_net_transaction_amount"]:
+    for col in ["promo_spend", "settlement_coupon_spend", "marketing_total_spend", "ad_transaction_amount", "ad_net_transaction_amount", "impressions", "clicks", "order_count", "deal_qty"]:
         out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0.0)
     return out
 
@@ -146,7 +155,7 @@ def promotion_batch_version(standardized: pd.DataFrame) -> str:
 def add_standard_promotion_columns(promo_df: pd.DataFrame | None) -> pd.DataFrame:
     raw = promo_df.copy() if promo_df is not None else pd.DataFrame()
     std = standardize_promotion_table(raw)
-    for col in ["date", "shop_name", "goods_id", "goods_name", "promo_spend", "settlement_coupon_spend", "marketing_total_spend", "ad_transaction_amount", "ad_net_transaction_amount", "old_roi", "net_roi", "settlement_roi", "data_version"]:
+    for col in ["date", "shop_name", "goods_id", "goods_name", "promo_spend", "settlement_coupon_spend", "marketing_total_spend", "ad_transaction_amount", "ad_net_transaction_amount", "old_roi", "net_roi", "settlement_roi", "impressions", "clicks", "order_count", "deal_qty", "data_version"]:
         raw[col] = std.reindex(raw.index).get(col)
     raw = raw.loc[std.index].copy() if len(std.index) else raw.iloc[0:0].copy()
     raw["日期"] = raw.get("日期", std.get("date"))

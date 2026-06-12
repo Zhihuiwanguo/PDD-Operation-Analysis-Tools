@@ -198,7 +198,7 @@ def build_analysis_context(
     product_summary = _analyze_products(orders, promo_by_product)
     spec_summary = _analyze_specs(orders)
     baibu_vs_normal = _analyze_baibu_vs_normal(orders, promo_by_product)
-    promotion_analysis = _analyze_promotion(promo_df, account_flow_validation)
+    promotion_analysis = _analyze_promotion(promo_df, account_flow_validation, orders)
     business_alerts = _build_business_alerts(link_summary, product_summary, spec_summary)
     overview = _analyze_overview(orders, cash_spend, promo_by_product, discount_split)
     exceptions = _analyze_exceptions(tables, orders, promo_by_product, diagnostics)
@@ -351,6 +351,64 @@ def _build_overview_daily_trend(valid_orders: pd.DataFrame) -> pd.DataFrame:
     return daily
 
 
+
+def _sum_numeric(df: pd.DataFrame, col: str) -> float:
+    if col not in df.columns:
+        return 0.0
+    return float(pd.to_numeric(df[col], errors="coerce").fillna(0.0).sum())
+
+
+def _order_product_group(valid_orders: pd.DataFrame) -> pd.DataFrame:
+    cols = [
+        "商品id", "商品", "标准产品名称", "商家实收金额(元)", "产品总成本", "快递费", "平台扣点",
+        "产品毛利额", "扣快递费毛利额", "订单侧估算毛利", "商品数量(件)",
+    ]
+    df = valid_orders.copy()
+    for col in cols:
+        if col not in df.columns:
+            df[col] = 0.0 if col not in ["商品id", "商品", "标准产品名称"] else ""
+    for col in ["商家实收金额(元)", "产品总成本", "快递费", "平台扣点", "产品毛利额", "扣快递费毛利额", "订单侧估算毛利", "商品数量(件)"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+    df["商品id"] = df["商品id"].fillna("").astype(str).str.strip()
+    grouped = (
+        df.groupby("商品id", dropna=False)
+        .agg(
+            商品名称=("商品", "first"),
+            标准产品=("标准产品名称", "first"),
+            有效订单数=("商品id", "size"),
+            推广成交件数=("商品数量(件)", "sum"),
+            商家实收金额=("商家实收金额(元)", "sum"),
+            产品总成本=("产品总成本", "sum"),
+            快递费=("快递费", "sum"),
+            平台扣点=("平台扣点", "sum"),
+            产品毛利额=("产品毛利额", "sum"),
+            扣快递费毛利额=("扣快递费毛利额", "sum"),
+            订单侧毛利额=("订单侧估算毛利", "sum"),
+        )
+        .reset_index()
+        .rename(columns={"商品id": "商品ID"})
+    )
+    grouped["产品毛利率"] = grouped.apply(lambda r: safe_divide(r["产品毛利额"], r["商家实收金额"]), axis=1)
+    grouped["扣快递费毛利率"] = grouped.apply(lambda r: safe_divide(r["扣快递费毛利额"], r["商家实收金额"]), axis=1)
+    return grouped
+
+
+def _build_product_profit_rank(valid_orders: pd.DataFrame, promo_by_product: pd.DataFrame | None) -> pd.DataFrame:
+    order_group = _order_product_group(valid_orders)
+    promo = promo_by_product.copy() if isinstance(promo_by_product, pd.DataFrame) else pd.DataFrame()
+    if promo.empty:
+        promo = pd.DataFrame(columns=["商品ID", "推广成交花费", "结算券花费"])
+    for col in ["商品ID", "推广成交花费", "结算券花费"]:
+        if col not in promo.columns:
+            promo[col] = 0.0 if col != "商品ID" else ""
+    promo["商品ID"] = promo["商品ID"].fillna("").astype(str).str.strip()
+    promo = promo.groupby("商品ID", as_index=False).agg(推广成交花费=("推广成交花费", "sum"), 结算券总额=("结算券花费", "sum"))
+    out = order_group.merge(promo, on="商品ID", how="left")
+    for col in ["推广成交花费", "结算券总额"]:
+        out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0.0)
+    out["扣推广后毛利"] = out["订单侧毛利额"] - out["推广成交花费"]
+    return out.sort_values("商家实收金额", ascending=False)
+
 def _analyze_overview(orders: pd.DataFrame, cash_spend: float, promo_by_product: pd.DataFrame | None = None, discount_split: pd.DataFrame | None = None) -> dict:
     valid_orders = orders[orders["订单分类"] == "有效"].copy()
     for amount_col in ["商品总价(元)", "店铺优惠折扣(元)", "平台优惠折扣(元)"]:
@@ -369,8 +427,14 @@ def _analyze_overview(orders: pd.DataFrame, cash_spend: float, promo_by_product:
     store_discount_amount = total_shop_discount - coupon_spend
     if isinstance(discount_split, pd.DataFrame) and "店铺设置优惠金额" in discount_split.columns:
         store_discount_amount = float(pd.to_numeric(discount_split["店铺设置优惠金额"], errors="coerce").fillna(0).sum())
+    product_total_cost = _sum_numeric(valid_orders, "产品总成本")
+    shipping_fee = _sum_numeric(valid_orders, "快递费")
+    platform_fee = _sum_numeric(valid_orders, "平台扣点")
+    product_gross_profit = total_merchant_income - product_total_cost
+    shipping_gross_profit = total_merchant_income - product_total_cost - shipping_fee
     gross_profit = valid_orders["订单侧估算毛利"].sum()
     valid_order_count = int((orders["订单分类"] == "有效").sum())
+    product_profit_rank = _build_product_profit_rank(valid_orders, promo_by_product)
     daily_trend = _build_overview_daily_trend(valid_orders)
     refund_metrics = summarize_refund_metrics(orders)
 
@@ -390,7 +454,15 @@ def _analyze_overview(orders: pd.DataFrame, cash_spend: float, promo_by_product:
         "商品营销总花费": float(marketing_total_spend),
         "店铺设置优惠金额": float(store_discount_amount),
         "客单价": float(safe_divide(total_merchant_income, valid_order_count)),
+        "产品总成本": float(product_total_cost),
+        "产品毛利额": float(product_gross_profit),
+        "产品毛利率": float(safe_divide(product_gross_profit, total_merchant_income)),
+        "快递费": float(shipping_fee),
+        "扣快递费毛利额": float(shipping_gross_profit),
+        "扣快递费毛利率": float(safe_divide(shipping_gross_profit, total_merchant_income)),
+        "平台扣点": float(platform_fee),
         "订单侧估算毛利": float(gross_profit),
+        "结算券总额": float(coupon_spend),
         "店铺总盘推广费（现金口径）": float(cash_spend),
         "店铺整体实际ROI": safe_divide(total_merchant_income, cash_spend),
         "店铺扣推广后贡献毛利": float(gross_profit - promo_spend),
@@ -405,9 +477,24 @@ def _analyze_overview(orders: pd.DataFrame, cash_spend: float, promo_by_product:
         "确认有效ROI": safe_divide(refund_metrics.get("确认有效商家实收", 0.0), promo_spend),
     }
 
+    profit_breakdown = pd.DataFrame([
+        {"项目": "商家实收", "金额": float(total_merchant_income), "说明": "有效订单商家实收收入"},
+        {"项目": "产品总成本", "金额": float(-product_total_cost), "说明": "只扣产品成本"},
+        {"项目": "产品毛利额", "金额": float(product_gross_profit), "说明": "商家实收 - 产品总成本"},
+        {"项目": "快递费", "金额": float(-shipping_fee), "说明": "有效订单快递成本"},
+        {"项目": "扣快递费毛利额", "金额": float(shipping_gross_profit), "说明": "商家实收 - 产品总成本 - 快递费"},
+        {"项目": "平台扣点", "金额": float(-platform_fee), "说明": "百补/日常扣点沿用原规则"},
+        {"项目": "订单侧毛利额", "金额": float(gross_profit), "说明": "未扣推广成交花费"},
+        {"项目": "推广成交花费", "金额": float(-promo_spend), "说明": "只扣推广表成交花费，不重复扣结算券"},
+        {"项目": "扣推广后毛利额", "金额": float(gross_profit - promo_spend), "说明": "订单侧毛利额 - 推广成交花费"},
+        {"项目": "结算券总额", "金额": float(coupon_spend), "说明": "已影响商家实收，仅列示不重复扣减"},
+    ])
+
     return {
         "metrics": metrics,
         "daily_trend": daily_trend,
+        "profit_breakdown": profit_breakdown,
+        "product_profit_rank": product_profit_rank,
     }
 
 
@@ -1505,17 +1592,25 @@ def _analyze_creative_material(
     }
 
 
-def _analyze_promotion(promo_df: pd.DataFrame, account_flow_validation: pd.DataFrame | None = None) -> dict[str, pd.DataFrame]:
+def _analyze_promotion(promo_df: pd.DataFrame, account_flow_validation: pd.DataFrame | None = None, orders: pd.DataFrame | None = None) -> dict[str, pd.DataFrame]:
     std = standardize_promotion_table(promo_df)
     base = _prepare_promotion_base(promo_df)
     if not std.empty:
         base = std.rename(columns={"goods_id": "商品ID", "goods_name": "链接标题", "promo_spend": "实际成交花费", "ad_transaction_amount": "结算金额", "ad_net_transaction_amount": "净交易额"}).copy()
         base["日期"] = pd.to_datetime(base["date"], errors="coerce")
-        base["曝光"] = 0.0
-        base["点击"] = 0.0
-        base["成交订单数"] = 0.0
+        base["曝光"] = pd.to_numeric(base.get("impressions", 0), errors="coerce").fillna(0.0)
+        base["点击"] = pd.to_numeric(base.get("clicks", 0), errors="coerce").fillna(0.0)
+        base["成交订单数"] = pd.to_numeric(base.get("order_count", 0), errors="coerce").fillna(0.0)
+        base["推广成交件数"] = pd.to_numeric(base.get("deal_qty", 0), errors="coerce").fillna(0.0)
         base["CTR"] = 0.0
         base["转化率"] = 0.0
+    for col in ["实际成交花费", "settlement_coupon_spend", "marketing_total_spend", "结算金额", "曝光", "点击", "成交订单数", "推广成交件数"]:
+        if col not in base.columns:
+            base[col] = 0.0
+        base[col] = pd.to_numeric(base[col], errors="coerce").fillna(0.0)
+    for col in ["日期", "商品ID", "链接标题"]:
+        if col not in base.columns:
+            base[col] = pd.NaT if col == "日期" else ""
     batch_version = promotion_batch_version(std)
 
     daily = (
@@ -1529,6 +1624,7 @@ def _analyze_promotion(promo_df: pd.DataFrame, account_flow_validation: pd.DataF
             曝光=("曝光", "sum"),
             点击=("点击", "sum"),
             成交订单数=("成交订单数", "sum"),
+            推广成交件数=("推广成交件数", "sum"),
         )
         .reset_index()
     )
@@ -1548,6 +1644,7 @@ def _analyze_promotion(promo_df: pd.DataFrame, account_flow_validation: pd.DataF
             曝光=("曝光", "sum"),
             点击=("点击", "sum"),
             成交订单数=("成交订单数", "sum"),
+            推广成交件数=("推广成交件数", "sum"),
             投放天数=("日期", lambda s: int(pd.Series(s).dropna().nunique())),
         )
         .reset_index()
@@ -1575,6 +1672,7 @@ def _analyze_promotion(promo_df: pd.DataFrame, account_flow_validation: pd.DataF
             曝光=("曝光", "sum"),
             点击=("点击", "sum"),
             成交订单数=("成交订单数", "sum"),
+            推广成交件数=("推广成交件数", "sum"),
         )
         .reset_index()
     )
@@ -1582,6 +1680,96 @@ def _analyze_promotion(promo_df: pd.DataFrame, account_flow_validation: pd.DataF
     detail["CTR"] = detail.apply(lambda r: safe_divide(r["点击"], r["曝光"]), axis=1)
     detail["转化率"] = detail.apply(lambda r: safe_divide(r["成交订单数"], r["点击"]), axis=1)
     detail = detail.sort_values(["商品ID", "日期"], ascending=[True, True])
+
+
+    valid_orders = pd.DataFrame()
+    if isinstance(orders, pd.DataFrame) and not orders.empty and "订单分类" in orders.columns:
+        valid_orders = orders[orders["订单分类"] == "有效"].copy()
+    order_finance = _order_product_group(valid_orders) if not valid_orders.empty else pd.DataFrame(columns=[
+        "商品ID", "商品名称", "标准产品", "有效订单数", "推广成交件数", "商家实收金额", "产品总成本", "快递费", "平台扣点", "产品毛利额", "产品毛利率", "扣快递费毛利额", "扣快递费毛利率", "订单侧毛利额",
+    ])
+    performance = goods.rename(columns={"实际成交花费": "成交花费", "结算金额": "推广成交金额", "结算投产比": "平台ROI"}).copy()
+    order_finance = order_finance.drop(columns=["推广成交件数"], errors="ignore")
+    performance = performance.merge(order_finance, on="商品ID", how="left")
+    for col in ["商家实收金额", "产品总成本", "快递费", "平台扣点", "订单侧毛利额", "有效订单数", "推广成交件数"]:
+        if col not in performance.columns:
+            performance[col] = 0.0
+        performance[col] = pd.to_numeric(performance[col], errors="coerce").fillna(0.0)
+    if "商品名称" in performance.columns and "链接标题" in performance.columns:
+        performance["商品名称"] = performance["商品名称"].fillna("").astype(str)
+        performance["商品名称"] = performance["商品名称"].mask(performance["商品名称"].eq(""), performance["链接标题"].fillna(""))
+    if "标准产品" not in performance.columns:
+        performance["标准产品"] = ""
+    performance["推广订单商家实收"] = performance["商家实收金额"]
+    performance["产品成本"] = performance["产品总成本"]
+    performance["财务ROI"] = performance.apply(lambda r: safe_divide(r["推广订单商家实收"], r["成交花费"]), axis=1)
+    performance["推广费率"] = performance.apply(lambda r: safe_divide(r["成交花费"], r["推广订单商家实收"]), axis=1)
+    performance["结算券总额"] = pd.to_numeric(performance.get("结算券花费", 0), errors="coerce").fillna(0.0)
+    performance["结算券占比"] = performance.apply(lambda r: safe_divide(r["结算券总额"], r["推广订单商家实收"]), axis=1)
+    performance["扣推广后毛利"] = performance["订单侧毛利额"] - performance["成交花费"]
+    performance["扣推广后毛利率"] = performance.apply(lambda r: safe_divide(r["扣推广后毛利"], r["推广订单商家实收"]), axis=1)
+    refund_counts = pd.DataFrame(columns=["商品ID", "退款订单数"])
+    if isinstance(orders, pd.DataFrame) and "是否退款成功" in orders.columns and "商品id" in orders.columns:
+        tmp_refund = orders.copy()
+        tmp_refund["商品ID"] = tmp_refund["商品id"].fillna("").astype(str).str.strip()
+        refund_counts = tmp_refund[tmp_refund["是否退款成功"].astype(bool)].groupby("商品ID").size().reset_index(name="退款订单数")
+    performance = performance.merge(refund_counts, on="商品ID", how="left")
+    performance["退款订单数"] = pd.to_numeric(performance.get("退款订单数", 0), errors="coerce").fillna(0.0)
+    performance["退款率"] = performance.apply(lambda r: safe_divide(r["退款订单数"], r["有效订单数"] + r["退款订单数"]), axis=1)
+
+    spend_threshold = performance["成交花费"].median() if len(performance) else 0
+    def _judge(row):
+        labels = []
+        if row["成交花费"] >= spend_threshold and row["财务ROI"] < 1:
+            labels.append("高消耗低ROI")
+        if row["推广成交金额"] > 0 and row["扣推广后毛利"] < 0:
+            labels.append("高成交但亏损")
+        if row["平台ROI"] >= 2 and row["扣推广后毛利率"] < 0.1:
+            labels.append("ROI达标但毛利差")
+        if row["结算券占比"] >= 0.1:
+            labels.append("结算券占比过高")
+        if row["扣推广后毛利"] > 0 and row["财务ROI"] >= 2 and row["扣推广后毛利率"] >= 0.15:
+            labels.append("可继续放量")
+        if row["扣推广后毛利"] < 0 or row["财务ROI"] < 1:
+            labels.append("建议停投")
+        elif row["财务ROI"] < 2 or row["扣推广后毛利率"] < 0.1:
+            labels.append("建议降出价")
+        return "、".join(labels) if labels else "控制ROI"
+    performance["判断标签"] = performance.apply(_judge, axis=1) if not performance.empty else ""
+    performance = performance.sort_values("成交花费", ascending=False)
+
+    promo_overview = {
+        "推广成交花费": float(pd.to_numeric(performance.get("成交花费", 0), errors="coerce").fillna(0).sum()),
+        "推广成交金额": float(pd.to_numeric(performance.get("推广成交金额", 0), errors="coerce").fillna(0).sum()),
+        "推广订单商家实收": float(pd.to_numeric(performance.get("推广订单商家实收", 0), errors="coerce").fillna(0).sum()),
+        "推广订单数": float(pd.to_numeric(performance.get("成交订单数", 0), errors="coerce").fillna(0).sum()),
+        "推广成交件数": float(pd.to_numeric(performance.get("推广成交件数", 0), errors="coerce").fillna(0).sum()),
+        "结算券总额": float(pd.to_numeric(performance.get("结算券总额", 0), errors="coerce").fillna(0).sum()),
+        "扣推广后毛利": float(pd.to_numeric(performance.get("扣推广后毛利", 0), errors="coerce").fillna(0).sum()),
+    }
+    promo_overview["平台ROI"] = safe_divide(promo_overview["推广成交金额"], promo_overview["推广成交花费"])
+    promo_overview["财务ROI"] = safe_divide(promo_overview["推广订单商家实收"], promo_overview["推广成交花费"])
+    promo_overview["推广费率"] = safe_divide(promo_overview["推广成交花费"], promo_overview["推广订单商家实收"])
+    promo_overview["结算券占商家实收比例"] = safe_divide(promo_overview["结算券总额"], promo_overview["推广订单商家实收"])
+    promo_overview["扣推广后毛利率"] = safe_divide(promo_overview["扣推广后毛利"], promo_overview["推广订单商家实收"])
+
+    diagnostics = []
+    diagnostics.append(f"推广效率诊断：本周期商品推广成交花费为 {promo_overview['推广成交花费']:.2f} 元，平台 ROI 为 {promo_overview['平台ROI']:.2f}，财务 ROI 为 {promo_overview['财务ROI']:.2f}。")
+    if promo_overview["财务ROI"] + 0.2 < promo_overview["平台ROI"]:
+        diagnostics.append("财务 ROI 明显低于平台 ROI，需重点检查结算券、平台优惠或退款对商家实收的压低影响。")
+    if not performance.empty:
+        top_amount = performance.sort_values("推广成交金额", ascending=False).head(1).iloc[0]
+        top_spend = performance.sort_values("成交花费", ascending=False).head(1).iloc[0]
+        loss = performance[performance["扣推广后毛利"] < 0].sort_values("扣推广后毛利").head(3)
+        diagnostics.append(f"商品投放诊断：推广成交金额 TOP 商品为 {top_amount.get('商品ID', '')}，成交花费 TOP 商品为 {top_spend.get('商品ID', '')}。")
+        if not loss.empty:
+            diagnostics.append("扣推广后亏损 TOP 商品：" + "、".join(loss["商品ID"].astype(str).tolist()))
+        high_coupon = performance.sort_values("结算券占比", ascending=False).head(1).iloc[0]
+        diagnostics.append(f"结算券影响诊断：结算券总额 {promo_overview['结算券总额']:.2f} 元，占商家实收 {promo_overview['结算券占商家实收比例']:.2%}；占比最高商品为 {high_coupon.get('商品ID', '')}。")
+        low_margin = performance[(performance.get("扣快递费毛利率", 0) < 0.1) | (performance["扣推广后毛利"] < 0)]
+        diagnostics.append(f"毛利承压诊断：当前识别到 {len(low_margin)} 个低毛利或推广后亏损商品。")
+        diagnostics.append("操作建议：可继续放量标签商品优先加预算；建议降出价商品控制 ROI；建议停投或推广后亏损商品暂停投放并检查结算券比例、低毛利规格和快递费。")
+    diagnostics_df = pd.DataFrame({"诊断结果": diagnostics})
 
     spend_median = goods["实际成交花费"].median() if len(goods) else 0
     roi_median = goods["结算投产比"].median() if len(goods) else 0
@@ -1631,6 +1819,9 @@ def _analyze_promotion(promo_df: pd.DataFrame, account_flow_validation: pd.DataF
     return {
         "data_version": batch_version,
         "account_flow_validation": account_flow_validation if account_flow_validation is not None else pd.DataFrame(),
+        "overview": promo_overview,
+        "performance": performance,
+        "diagnostics": diagnostics_df,
         "daily": daily,
         "goods": goods,
         "detail": detail,
