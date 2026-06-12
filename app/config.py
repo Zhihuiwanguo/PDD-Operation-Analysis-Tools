@@ -21,7 +21,19 @@ class BusinessRules:
     pending_after_sale_statuses: tuple[str, ...] = ("售后处理中",)
     non_operating_keywords: tuple[str, ...] = ("差价补款", "补差价")
     bb_keywords: tuple[str, ...] = ("百补",)
-    effective_order_status_keywords: tuple[str, ...] = ("成交", "已发货", "已收货", "已完成", "已成团")
+    effective_order_status_keywords: tuple[str, ...] = (
+        "成交",
+        "已发货",
+        "已收货",
+        "已完成",
+        "已成团",
+        "已支付",
+        "待发货",
+        "待收货",
+        "已签收",
+        "交易成功",
+        "交易完成",
+    )
 
 
 @dataclass(frozen=True)

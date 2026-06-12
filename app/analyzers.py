@@ -196,7 +196,7 @@ def build_analysis_context(
     refund_analysis = build_refund_analysis(orders)
     link_summary = _analyze_links(orders, promo_by_product)
     product_summary = _analyze_products(orders, promo_by_product)
-    spec_summary = _analyze_specs(orders)
+    spec_summary = _analyze_specs(orders, promo_by_product)
     baibu_vs_normal = _analyze_baibu_vs_normal(orders, promo_by_product)
     promotion_analysis = _analyze_promotion(promo_df, account_flow_validation, orders)
     business_alerts = _build_business_alerts(link_summary, product_summary, spec_summary)
@@ -706,8 +706,7 @@ def _analyze_links(orders: pd.DataFrame, promo_by_product: pd.DataFrame) -> pd.D
     result = _add_refund_columns(result, refund_by_goods, ["商品ID"])
     result["商家实收"] = np.where(result["支付口径商家实收"] > 0, result["支付口径商家实收"], result["商家实收"])
 
-    result["推广结算券金额"] = result["结算券花费"]
-    result["店铺设置优惠金额"] = result["店铺优惠折扣"] - result["推广结算券金额"]
+    result = _add_discount_split_columns(result)
     result["是否异常"] = np.where(result["店铺设置优惠金额"] < -0.01, "口径差异/退款结算差异", "否")
     result["链接校验提示"] = np.where(result["成交花费"] > result["商家实收"], "高投放/低产出链接", "")
     result["毛利金额"] = result["订单侧估算毛利"]
@@ -721,6 +720,24 @@ def _analyze_links(orders: pd.DataFrame, promo_by_product: pd.DataFrame) -> pd.D
     result["退款后ROI"] = result.apply(lambda r: _safe_roi(r["剔除退款后商家实收"], r["成交花费"]), axis=1)
     result["确认有效ROI"] = result.apply(lambda r: _safe_roi(r["确认有效商家实收"], r["成交花费"]), axis=1)
     return result.sort_values("订单侧估算毛利", ascending=False)
+
+
+def _add_discount_split_columns(out: pd.DataFrame) -> pd.DataFrame:
+    """Add explicit discount split columns without changing profit math."""
+    out = out.copy()
+    for col in ["店铺优惠折扣", "平台优惠折扣", "结算券花费", "推广结算券金额"]:
+        if col not in out.columns:
+            out[col] = 0.0
+        out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0.0)
+
+    if "推广结算券金额" not in out.columns or out["推广结算券金额"].sum() == 0:
+        out["推广结算券金额"] = out["结算券花费"]
+    out["店铺设置优惠金额"] = out["店铺优惠折扣"] - out["推广结算券金额"]
+    out["店铺优惠"] = out["店铺设置优惠金额"]
+    out["推广结算券"] = out["推广结算券金额"]
+    out["平台优惠"] = out["平台优惠折扣"]
+    out["优惠拆分校验"] = out["店铺设置优惠金额"] + out["推广结算券金额"] + out["平台优惠折扣"]
+    return out
 
 
 def _build_product_promo(valid_orders: pd.DataFrame, promo_by_product: pd.DataFrame) -> pd.DataFrame:
@@ -877,6 +894,8 @@ def _analyze_products(orders: pd.DataFrame, promo_by_product: pd.DataFrame) -> p
             out[col] = 0.0
         out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0.0)
 
+    out = _add_discount_split_columns(out)
+
     out["扣推广后贡献毛利"] = out["订单侧估算毛利"] - out["推广成交花费"]
     out["经营利润"] = out["扣推广后贡献毛利"]
     out["实际ROI"] = out.apply(lambda r: safe_divide(r["商家实收"], r["推广成交花费"]), axis=1)
@@ -949,7 +968,7 @@ def _analyze_baibu_vs_normal(orders: pd.DataFrame, promo_by_product: pd.DataFram
     return out.sort_values("是否百补")
 
 
-def _analyze_specs(orders: pd.DataFrame) -> pd.DataFrame:
+def _analyze_specs(orders: pd.DataFrame, promo_by_product: pd.DataFrame | None = None) -> pd.DataFrame:
     valid_orders = orders[orders["订单分类"] == "有效"].copy()
 
     top_products = (
@@ -964,15 +983,30 @@ def _analyze_specs(orders: pd.DataFrame) -> pd.DataFrame:
     scope_valid = valid_orders[valid_orders["标准产品名称"].isin(top_products)].copy()
 
     spec_col = "销售规格名称" if "销售规格名称" in scope_all.columns else "商品规格"
-    group_cols = ["标准产品名称", spec_col]
+    group_cols = ["商品id", "标准产品名称", spec_col]
+
+    for df in [scope_all, scope_valid]:
+        if "商品id" not in df.columns:
+            df["商品id"] = ""
+        df["商品id"] = df["商品id"].fillna("").astype(str).str.strip()
+        if spec_col not in df.columns:
+            df[spec_col] = ""
 
     counts = scope_all.groupby(group_cols, dropna=False).agg(
         有效订单数=("订单分类", lambda s: int((s == "有效").sum())),
         无效订单数=("订单分类", lambda s: int((s == "无效").sum())),
     ).reset_index()
 
+    for amount_col in ["商品总价(元)", "店铺优惠折扣(元)", "平台优惠折扣(元)"]:
+        if amount_col not in scope_valid.columns:
+            scope_valid[amount_col] = 0.0
+        scope_valid[amount_col] = pd.to_numeric(scope_valid[amount_col], errors="coerce").fillna(0.0)
+
     metrics = scope_valid.groupby(group_cols, dropna=False).agg(
         销售件数=("商品数量(件)", "sum"),
+        商品总价=("商品总价(元)", "sum"),
+        店铺优惠折扣=("店铺优惠折扣(元)", "sum"),
+        平台优惠折扣=("平台优惠折扣(元)", "sum"),
         用户实付=("用户实付金额(元)", "sum"),
         商家实收=("商家实收金额(元)", "sum"),
         产品总成本=("产品总成本", "sum"),
@@ -982,9 +1016,42 @@ def _analyze_specs(orders: pd.DataFrame) -> pd.DataFrame:
     ).reset_index()
 
     out = counts.merge(metrics, on=group_cols, how="left")
-    out = out.rename(columns={spec_col: "销售规格名称"})
-    for col in ["销售件数", "用户实付", "商家实收", "产品总成本", "快递总成本", "平台扣点", "订单侧估算毛利"]:
+    out = out.rename(columns={"商品id": "商品ID", spec_col: "销售规格名称"})
+
+    promo = promo_by_product.copy() if isinstance(promo_by_product, pd.DataFrame) else pd.DataFrame()
+    if promo.empty:
+        promo_coupon = pd.DataFrame(columns=["商品ID", "商品ID结算券花费"])
+    else:
+        if "商品ID" not in promo.columns:
+            promo["商品ID"] = ""
+        if "结算券花费" not in promo.columns:
+            promo["结算券花费"] = 0.0
+        promo["商品ID"] = promo["商品ID"].fillna("").astype(str).str.strip()
+        promo["结算券花费"] = pd.to_numeric(promo["结算券花费"], errors="coerce").fillna(0.0)
+        promo_coupon = promo.groupby("商品ID", as_index=False).agg(商品ID结算券花费=("结算券花费", "sum"))
+
+    out = out.merge(promo_coupon, on="商品ID", how="left")
+    for col in ["销售件数", "商品总价", "店铺优惠折扣", "平台优惠折扣", "用户实付", "商家实收", "产品总成本", "快递总成本", "平台扣点", "订单侧估算毛利", "商品ID结算券花费"]:
+        if col not in out.columns:
+            out[col] = 0.0
         out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0.0)
+
+    goods_totals = out.groupby("商品ID", dropna=False).agg(
+        商品ID店铺优惠折扣=("店铺优惠折扣", "sum"),
+        商品ID商家实收=("商家实收", "sum"),
+        商品ID有效订单数=("有效订单数", "sum"),
+    ).reset_index()
+    out = out.merge(goods_totals, on="商品ID", how="left")
+
+    discount_ratio = out.apply(lambda r: safe_divide(r["店铺优惠折扣"], r["商品ID店铺优惠折扣"]), axis=1)
+    revenue_ratio = out.apply(lambda r: safe_divide(r["商家实收"], r["商品ID商家实收"]), axis=1)
+    order_ratio = out.apply(lambda r: safe_divide(r["有效订单数"], r["商品ID有效订单数"]), axis=1)
+    allocation_ratio = discount_ratio.where(out["商品ID店铺优惠折扣"] > 0, revenue_ratio)
+    allocation_ratio = allocation_ratio.where(out["商品ID商家实收"] > 0, order_ratio).fillna(0.0)
+    out["结算券花费"] = out["商品ID结算券花费"] * allocation_ratio
+    out["推广结算券金额"] = out["结算券花费"]
+    out = _add_discount_split_columns(out)
+    out = out.drop(columns=["商品ID结算券花费", "商品ID店铺优惠折扣", "商品ID商家实收", "商品ID有效订单数"], errors="ignore")
 
     out["单均实收"] = out.apply(lambda r: safe_divide(r["商家实收"], r["有效订单数"]), axis=1)
     out["单均订单侧毛利"] = out.apply(lambda r: safe_divide(r["订单侧估算毛利"], r["有效订单数"]), axis=1)
@@ -992,8 +1059,7 @@ def _analyze_specs(orders: pd.DataFrame) -> pd.DataFrame:
     out["无效率"] = out.apply(lambda r: safe_divide(r["无效订单数"], r["有效订单数"] + r["无效订单数"]), axis=1)
     out["规格定位建议"] = out.apply(_spec_positioning, axis=1)
 
-    return out.sort_values(["标准产品名称", "销售件数"], ascending=[True, False])
-
+    return out.sort_values(["标准产品名称", "商品ID", "销售件数"], ascending=[True, True, False])
 
 def _build_business_alerts(
     link_summary: pd.DataFrame,
