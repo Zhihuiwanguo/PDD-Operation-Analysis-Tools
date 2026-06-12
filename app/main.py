@@ -393,7 +393,7 @@ def main() -> None:
         links.render(ctx["link_summary"])
 
     with tab5:
-        products.render(ctx["product_summary"])
+        products.render(ctx["product_summary"], ctx.get("link_summary", pd.DataFrame()))
 
     with tab6:
         refund_after_sale.render(ctx.get("refund_analysis", {}))

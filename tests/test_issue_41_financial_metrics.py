@@ -1,6 +1,6 @@
 import pandas as pd
 
-from app.analyzers import _analyze_overview, _analyze_promotion
+from app.analyzers import _analyze_links, _analyze_overview, _analyze_products, _analyze_promotion, _analyze_specs
 from app.marketing_schema import standardize_promotion_table
 
 
@@ -115,3 +115,76 @@ def test_empty_promotion_analysis_returns_zero_overview_without_error():
     result = _analyze_promotion(pd.DataFrame(), orders=_orders())
     assert result["overview"]["推广成交花费"] == 0
     assert result["performance"].empty
+
+
+def _orders_with_discount_split():
+    orders = _orders().copy()
+    orders["订单号"] = ["o1", "o2", "o3"]
+    orders["是否百补"] = ["否", "否", "否"]
+    orders["商品规格"] = ["大规格", "小规格", "大规格"]
+    orders["商品总价(元)"] = [120, 80, 120]
+    orders["店铺优惠折扣(元)"] = [15, 10, 15]
+    orders["平台优惠折扣(元)"] = [5, 3, 5]
+    return orders
+
+
+def test_product_and_goods_discount_split_do_not_double_deduct_settlement_coupon():
+    promo_by_product = pd.DataFrame(
+        {
+            "商品ID": ["1001", "1002"],
+            "实际成交花费(元)": [10, 20],
+            "推广成交花费": [10, 20],
+            "结算券花费": [5, 6],
+            "商品营销总花费": [15, 26],
+        }
+    )
+
+    orders = _orders_with_discount_split()
+    products = _analyze_products(orders, promo_by_product).set_index("标准产品名称")
+    links = _analyze_links(orders, promo_by_product).set_index("商品ID")
+
+    assert products.loc["产品A", "推广结算券金额"] == 5
+    assert products.loc["产品A", "店铺设置优惠金额"] == 10
+    assert products.loc["产品A", "平台优惠"] == 5
+    assert products.loc["产品A", "扣推广后贡献毛利"] == 40  # 订单侧毛利50 - 推广成交花费10，不再扣结算券5
+
+    assert links.loc["1001", "推广结算券"] == 5
+    assert links.loc["1001", "店铺优惠"] == 10
+    assert links.loc["1001", "平台优惠"] == 5
+    assert links.loc["1001", "扣推广后贡献毛利"] == 40
+
+
+def test_spec_analysis_groups_by_goods_id_and_spec_with_allocated_discount_split():
+    promo_by_product = pd.DataFrame(
+        {
+            "商品ID": ["1001", "1002"],
+            "推广成交花费": [10, 20],
+            "结算券花费": [5, 6],
+            "商品营销总花费": [15, 26],
+        }
+    )
+
+    specs = _analyze_specs(_orders_with_discount_split(), promo_by_product).set_index(["商品ID", "销售规格名称"])
+
+    assert ("1001", "大规格") in specs.index
+    assert specs.loc[("1001", "大规格"), "推广结算券金额"] == 5
+    assert specs.loc[("1001", "大规格"), "店铺设置优惠金额"] == 10
+    assert specs.loc[("1001", "大规格"), "平台优惠"] == 5
+    assert specs.loc[("1001", "大规格"), "订单侧估算毛利"] == 50
+
+
+def test_classify_orders_treats_additional_paid_shipping_and_completed_statuses_as_valid():
+    from app.calculators import classify_orders
+
+    statuses = ["已支付", "待发货", "待收货", "已签收", "交易成功", "交易完成"]
+    orders = pd.DataFrame(
+        {
+            "订单状态": statuses,
+            "售后状态": [""] * len(statuses),
+            "商品": ["普通商品"] * len(statuses),
+        }
+    )
+
+    result = classify_orders(orders)
+
+    assert result["订单分类"].tolist() == ["有效"] * len(statuses)

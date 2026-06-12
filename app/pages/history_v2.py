@@ -32,7 +32,7 @@ def render() -> None:
         if tables.get('orders', pd.DataFrame()).empty:
             st.warning('查询范围无数据'); return
         ctx=build_analysis_context(tables)
-        overview.render(ctx['overview']); links.render(ctx['link_summary']); products.render(ctx['product_summary']); specs.render(ctx['spec_summary']); baibu_vs_normal.render(ctx['baibu_vs_normal']); promotion.render(ctx['promotion_analysis']);
+        overview.render(ctx['overview']); links.render(ctx['link_summary']); products.render(ctx['product_summary'], ctx.get('link_summary', pd.DataFrame())); specs.render(ctx['spec_summary']); baibu_vs_normal.render(ctx['baibu_vs_normal']); promotion.render(ctx['promotion_analysis']);
         kpi_assessment.render({'说明':'历史V2已加载，请在主页面查看完整Q2指标'}); ai_decision.render(ctx=ctx, q2_result={'经营建议':'请结合主页面Q2目标查看'}, notes=[])
     st.markdown('---')
     st.write('最近导入批次')
